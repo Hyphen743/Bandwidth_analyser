@@ -57,21 +57,21 @@ def setup_page(title: str, subtitle: Optional[str] = None) -> Tuple[DatabaseRepo
 def render_sidebar(repo: DatabaseRepository) -> Dict[str, Any]:
     """Render unified navigation and filter controls in Streamlit sidebar."""
     with st.sidebar:
-        sidebar_logo_html = (
-            '<div style="margin-bottom:1.25rem;">'
-            '<div style="font-size:1.2rem;font-weight:700;font-family:\'Newsreader\',Georgia,serif;color:#C8553D;">'
-            'BANDWIDTH ANALYZER</div>'
-            '<div style="font-size:0.75rem;color:#8C867E;letter-spacing:0.05em;text-transform:uppercase;">'
-            'Network Telemetry & ML Suite</div></div>'
-        )
-        st.markdown(sidebar_logo_html, unsafe_allow_html=True)
-
-        # Dark mode toggle
-        dark_toggle = st.toggle("Dark Theme (Charcoal)", value=st.session_state.get("dark_mode", False))
+        # Theme toggle at the very top of the sidebar
+        dark_toggle = st.toggle("🌙 Dark Mode (Charcoal)", value=st.session_state.get("dark_mode", False))
         if dark_toggle != st.session_state.get("dark_mode", False):
             st.session_state["dark_mode"] = dark_toggle
             repo.set_setting("theme_mode", "dark" if dark_toggle else "light")
             st.rerun()
+
+        sidebar_logo_html = (
+            '<div style="margin-top:0.4rem;margin-bottom:1.25rem;">'
+            '<div style="font-size:1.2rem;font-weight:700;font-family:\'Newsreader\',Georgia,serif;color:#C8553D;">'
+            'BANDWIDTH ANALYZER</div>'
+            '<div style="font-size:0.75rem;color:var(--text-muted);letter-spacing:0.05em;text-transform:uppercase;">'
+            'Network Telemetry & ML Suite</div></div>'
+        )
+        st.markdown(sidebar_logo_html, unsafe_allow_html=True)
 
         # Data Source Mode (Simulated vs Live)
         st.markdown("---")
