@@ -84,3 +84,20 @@ def test_ranking_analytics(repo, date_window):
     dev_ranks = engine.get_device_rankings(date_window[0], date_window[1], limit=5)
     assert not dev_ranks.empty
     assert len(dev_ranks) <= 5
+
+
+def test_format_helpers():
+    from ui.common import format_bytes, format_mbps
+    assert format_bytes(0) == "0 B"
+    assert format_bytes(500) == "500 B"
+    assert format_bytes(1024) == "1.00 KB"
+    assert format_bytes(1024 * 1024) == "1.00 MB"
+    assert format_bytes(1024 * 1024 * 1024) == "1.00 GB"
+    assert format_bytes(1024 * 1024 * 1024 * 1024) == "1.00 TB"
+    assert format_bytes(1.5 * 1024 * 1024 * 1024 * 1024) == "1.50 TB"
+
+    assert format_mbps(0) == "0.0 Mbps"
+    assert format_mbps(0.5) == "500.00 Kbps"
+    assert format_mbps(25.4) == "25.40 Mbps"
+    assert format_mbps(1200.0) == "1.20 Gbps"
+

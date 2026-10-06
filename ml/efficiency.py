@@ -217,6 +217,7 @@ class EfficiencyEngine:
                     "entity_type": "Application",
                     "name": r["app_name"],
                     "category": cat,
+                    "total_bytes": tot,
                     "total_gb": round(tot / (1024.0 ** 3), 3),
                     "efficiency_score": round(score, 1),
                     "rating": "Efficient" if score >= 70 else ("Moderate" if score >= 40 else "Inefficient")

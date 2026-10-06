@@ -16,7 +16,7 @@ import streamlit as st
 
 from analytics.updown import UpDownAnalytics
 from ui.charts import build_area_updown_chart, build_bar_chart
-from ui.common import download_csv_button, render_kpi, setup_page
+from ui.common import download_csv_button, format_bytes, render_kpi, setup_page
 
 st.set_page_config(page_title="Upload vs Download", page_icon="⚖️", layout="wide")
 
@@ -37,10 +37,13 @@ def main() -> None:
 
     # KPIs
     k1, k2, k3, k4 = st.columns(4)
-    render_kpi(k1, "Total Uploaded", f"{summary['gb_up']:.1f} GB", delta=f"{summary['pct_up']}% of all bytes")
-    render_kpi(k2, "Total Downloaded", f"{summary['gb_down']:.1f} GB", delta=f"{summary['pct_down']}% of all bytes")
+    up_bytes = summary.get("bytes_up", summary["gb_up"] * (1024**3))
+    down_bytes = summary.get("bytes_down", summary["gb_down"] * (1024**3))
+    tot_bytes = summary.get("total_bytes", summary["total_gb"] * (1024**3))
+    render_kpi(k1, "Total Uploaded", format_bytes(up_bytes), delta=f"{summary['pct_up']}% of all bytes")
+    render_kpi(k2, "Total Downloaded", format_bytes(down_bytes), delta=f"{summary['pct_down']}% of all bytes")
     render_kpi(k3, "Overall Up/Down Ratio", f"{summary['ratio']:.2f}", delta="Typical broadband: 0.15 - 0.35")
-    render_kpi(k4, "Combined Volume", f"{summary['total_gb']:.1f} GB", delta="Bidirectional aggregate")
+    render_kpi(k4, "Combined Volume", format_bytes(tot_bytes), delta="Bidirectional aggregate")
 
     st.markdown("<div style='margin-top: 1rem;'></div>", unsafe_allow_html=True)
 

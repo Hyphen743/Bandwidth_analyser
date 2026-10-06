@@ -16,7 +16,7 @@ import streamlit as st
 
 from analytics.device_analysis import DeviceAnalytics
 from ui.charts import build_bar_chart, build_donut_chart
-from ui.common import download_csv_button, render_kpi, setup_page
+from ui.common import download_csv_button, format_bytes, render_kpi, setup_page
 
 st.set_page_config(page_title="Devices & Users", page_icon="💻", layout="wide")
 
@@ -48,13 +48,16 @@ def main() -> None:
 
     # KPIs
     k1, k2, k3, k4 = st.columns(4)
-    total_gb = device_df["total_gb"].sum()
+    total_bytes = device_df["total_bytes"].sum() if "total_bytes" in device_df.columns else device_df["total_gb"].sum() * (1024**3)
     render_kpi(k1, "Monitored Endpoints", f"{len(device_df)} Devices", delta=f"{len(user_df)} mapped users")
     if highest_dev:
-        render_kpi(k2, "Top Endpoint", highest_dev["hostname"], delta=f"{highest_dev['total_gb']:.1f} GB ({highest_dev['pct_contribution']}%)")
+        top_bytes = highest_dev["total_bytes"] if "total_bytes" in highest_dev else highest_dev["total_gb"] * (1024**3)
+        render_kpi(k2, "Top Endpoint", highest_dev["hostname"], delta=f"{format_bytes(top_bytes)} ({highest_dev['pct_contribution']}%)")
     if lowest_dev:
-        render_kpi(k3, "Lowest Endpoint", lowest_dev["hostname"], delta=f"{lowest_dev['total_gb']:.2f} GB ({lowest_dev['pct_contribution']}%)")
-    render_kpi(k4, "Avg Device Load", f"{device_df['total_gb'].mean():.1f} GB", delta="Per-endpoint average")
+        low_bytes = lowest_app_bytes = lowest_dev["total_bytes"] if "total_bytes" in lowest_dev else lowest_dev["total_gb"] * (1024**3)
+        render_kpi(k3, "Lowest Endpoint", lowest_dev["hostname"], delta=f"{format_bytes(lowest_app_bytes)} ({lowest_dev['pct_contribution']}%)")
+    avg_dev_bytes = device_df["total_bytes"].mean() if "total_bytes" in device_df.columns else device_df["total_gb"].mean() * (1024**3)
+    render_kpi(k4, "Avg Device Load", format_bytes(avg_dev_bytes), delta="Per-endpoint average")
 
     st.markdown("<div style='margin-top: 1rem;'></div>", unsafe_allow_html=True)
 

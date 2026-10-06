@@ -215,3 +215,34 @@ def download_csv_button(
         mime="text/csv",
         use_container_width=False
     )
+
+
+def format_bytes(num_bytes: Union[int, float], precision: int = 2) -> str:
+    """Format byte counts dynamically into B, KB, MB, GB, or TB."""
+    if num_bytes is None or pd.isna(num_bytes) or num_bytes == 0:
+        return "0 B"
+    num = float(num_bytes)
+    negative = num < 0
+    num = abs(num)
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    idx = 0
+    while num >= 1024.0 and idx < len(units) - 1:
+        num /= 1024.0
+        idx += 1
+    prefix = "-" if negative else ""
+    if idx == 0:
+        return f"{prefix}{int(num)} B"
+    return f"{prefix}{num:.{precision}f} {units[idx]}"
+
+
+def format_mbps(mbps: Union[int, float], precision: int = 2) -> str:
+    """Format throughput dynamically into Kbps, Mbps, or Gbps."""
+    if mbps is None or pd.isna(mbps) or mbps == 0:
+        return "0.0 Mbps"
+    val = float(mbps)
+    if val >= 1000.0:
+        return f"{val / 1000.0:.{precision}f} Gbps"
+    elif val < 1.0:
+        return f"{val * 1000.0:.{precision}f} Kbps"
+    return f"{val:.{precision}f} Mbps"
+

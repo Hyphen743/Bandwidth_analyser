@@ -22,7 +22,7 @@ from collector.live_collector import LiveCollector
 from db.repository import DatabaseRepository
 from ml.efficiency import EfficiencyEngine
 from ui.charts import build_bar_chart, build_donut_chart, build_line_chart
-from ui.common import download_csv_button, render_kpi, setup_page
+from ui.common import download_csv_button, format_bytes, format_mbps, render_kpi, setup_page
 
 # Page Config must be the first Streamlit command
 st.set_page_config(
@@ -57,7 +57,7 @@ def main() -> None:
         "SELECT COALESCE(SUM(bytes_up + bytes_down), 0) AS total_bytes FROM bandwidth_usage WHERE ts >= :today_start",
         {"today_start": f"{today_str} 00:00:00"}
     )
-    today_gb = round(float(today_df.iloc[0]["total_bytes"] or 0) / (1024.0 ** 3), 2) if not today_df.empty else 0.0
+    today_bytes = float(today_df.iloc[0]["total_bytes"] or 0) if not today_df.empty else 0.0
 
     # Alerts count
     alerts_df = repo.get_alerts(unacknowledged_only=True)
@@ -78,8 +78,8 @@ def main() -> None:
     render_kpi(
         col=c1,
         title="Current Throughput",
-        value=f"{current_mbps:.1f} Mbps",
-        delta=f"↑ {latest_live['mbps_up']:.1f} | ↓ {latest_live['mbps_down']:.1f}",
+        value=format_mbps(current_mbps),
+        delta=f"↑ {format_mbps(latest_live['mbps_up'])} | ↓ {format_mbps(latest_live['mbps_down'])}",
         delta_type="neutral"
     )
 
@@ -87,7 +87,7 @@ def main() -> None:
     render_kpi(
         col=c2,
         title="Today's Data Transferred",
-        value=f"{today_gb:.2f} GB",
+        value=format_bytes(today_bytes),
         delta=f"Active period volume",
         delta_type="neutral"
     )

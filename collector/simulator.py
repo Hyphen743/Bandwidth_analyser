@@ -27,7 +27,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("simulator")
 
 # Link capacity constant
-DEFAULT_CAPACITY_MBPS = 100.0
+DEFAULT_CAPACITY_MBPS = 25.0
 
 
 class NetworkSimulator:
@@ -121,23 +121,24 @@ class NetworkSimulator:
                 for app_name, (up_mbps, down_mbps) in active_apps.items():
                     app_id, category = self.app_map[app_name]
 
-                    # Scale by diurnal factor + random jitter
+                    # Scale by diurnal factor + random jitter + 0.10 realism factor (~1.5 TB for 90 days)
                     jitter = self.random.uniform(0.85, 1.15)
-                    actual_up_mbps = max(0.01, up_mbps * diurnal_factor * jitter)
-                    actual_down_mbps = max(0.01, down_mbps * diurnal_factor * jitter)
+                    SCALE_FACTOR = 0.10
+                    actual_up_mbps = max(0.005, up_mbps * diurnal_factor * jitter * SCALE_FACTOR)
+                    actual_down_mbps = max(0.005, down_mbps * diurnal_factor * jitter * SCALE_FACTOR)
 
                     # Anomaly boosts
                     if active_anomaly == "upload_exfiltration" and hostname in ("Office-Server", "Bob-DevStation") and app_name == "Dropbox Backup":
-                        actual_up_mbps = self.random.uniform(75.0, 90.0)
-                        actual_down_mbps = 1.2
+                        actual_up_mbps = self.random.uniform(18.0, 24.0)
+                        actual_down_mbps = 0.2
                     elif active_anomaly == "runaway_update" and app_name in ("Windows Update", "System Packages"):
-                        actual_down_mbps = self.random.uniform(35.0, 48.0)
-                        actual_up_mbps = 0.5
+                        actual_down_mbps = self.random.uniform(16.0, 22.0)
+                        actual_up_mbps = 0.1
                     elif active_anomaly == "backup_burst" and app_name in ("Google Drive", "Dropbox Backup"):
-                        actual_up_mbps = self.random.uniform(50.0, 70.0)
-                        actual_down_mbps = 5.0
+                        actual_up_mbps = self.random.uniform(10.0, 16.0)
+                        actual_down_mbps = 0.8
                     elif active_anomaly == "congestion_episode" and app_name in ("Netflix", "Steam Games", "YouTube"):
-                        actual_down_mbps *= 2.4
+                        actual_down_mbps *= 2.8
 
                     # Convert Mbps to bytes per 1-hour interval
                     # bytes = (mbps * 1,000,000 / 8) * 3600
@@ -153,7 +154,8 @@ class NetworkSimulator:
                         "app_id": app_id,
                         "ts": current_ts,
                         "bytes_up": bytes_up,
-                        "bytes_down": bytes_down
+                        "bytes_down": bytes_down,
+                        "source": "simulated"
                     })
 
             # Calculate network metrics for this hour
@@ -182,7 +184,8 @@ class NetworkSimulator:
                 "jitter_ms": jitter_ms,
                 "packet_loss_pct": packet_loss_pct,
                 "capacity_mbps": DEFAULT_CAPACITY_MBPS,
-                "utilization_pct": utilization_pct
+                "utilization_pct": utilization_pct,
+                "source": "simulated"
             })
 
             # Ground truth anomaly logging & alert injection
@@ -201,9 +204,9 @@ class NetworkSimulator:
                         "entity_type": "device",
                         "entity_id": self.device_map["Office-Server"],
                         "severity": "critical",
-                        "reason": "Abnormal off-hours outbound data surge (>80 Mbps)",
-                        "value": 85.4,
-                        "baseline": 1.2
+                        "reason": "Abnormal off-hours outbound data surge (>18 Mbps)",
+                        "value": 20.4,
+                        "baseline": 0.2
                     })
                 elif active_anomaly == "runaway_update":
                     labels_batch.append({
@@ -219,9 +222,9 @@ class NetworkSimulator:
                         "entity_type": "application",
                         "entity_id": self.app_map["Windows Update"][0],
                         "severity": "warn",
-                        "reason": "Runaway background system update spike (>90 Mbps aggregate)",
-                        "value": 91.2,
-                        "baseline": 4.5
+                        "reason": "Runaway background system update spike (>16 Mbps aggregate)",
+                        "value": 18.2,
+                        "baseline": 0.8
                     })
                 elif active_anomaly == "backup_burst":
                     labels_batch.append({
@@ -238,8 +241,8 @@ class NetworkSimulator:
                         "entity_id": self.app_map["Dropbox Backup"][0],
                         "severity": "info",
                         "reason": "Scheduled cloud backup payload spike",
-                        "value": 68.0,
-                        "baseline": 2.0
+                        "value": 14.0,
+                        "baseline": 0.5
                     })
                 elif active_anomaly == "congestion_episode":
                     labels_batch.append({

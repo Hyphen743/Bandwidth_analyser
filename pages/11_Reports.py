@@ -21,7 +21,7 @@ from analytics.app_analysis import ApplicationAnalytics
 from analytics.device_analysis import DeviceAnalytics
 from ml.efficiency import EfficiencyEngine
 from ui.charts import build_donut_chart, build_line_chart
-from ui.common import download_csv_button, render_kpi, setup_page
+from ui.common import download_csv_button, format_bytes, render_kpi, setup_page
 
 st.set_page_config(page_title="Reports & Replay", page_icon="📑", layout="wide")
 
@@ -35,12 +35,12 @@ def generate_html_report(
 ) -> str:
     """Produce self-contained printable HTML executive report."""
     apps_rows = "".join([
-        f"<tr><td>{r['app_name']}</td><td>{r['category']}</td><td>{r['total_gb']:.2f} GB</td></tr>"
+        f"<tr><td>{r['app_name']}</td><td>{r['category']}</td><td>{format_bytes(r['total_bytes'] if 'total_bytes' in r else r['total_gb'] * (1024**3))}</td></tr>"
         for _, r in top_apps.head(5).iterrows()
     ]) if not top_apps.empty else "<tr><td colspan='3'>None</td></tr>"
 
     dev_rows = "".join([
-        f"<tr><td>{r['hostname']}</td><td>{r['user_name']}</td><td>{r['total_gb']:.2f} GB</td></tr>"
+        f"<tr><td>{r['hostname']}</td><td>{r['user_name']}</td><td>{format_bytes(r['total_bytes'] if 'total_bytes' in r else r['total_gb'] * (1024**3))}</td></tr>"
         for _, r in top_devices.head(5).iterrows()
     ]) if not top_devices.empty else "<tr><td colspan='3'>None</td></tr>"
 
@@ -84,7 +84,7 @@ def generate_html_report(
 
             <div class="kpi-grid">
                 <div class="kpi-box">
-                    <div class="kpi-val">{summary_data['total_gb']:.1f} GB</div>
+                    <div class="kpi-val">{summary_data.get('total_volume_formatted', f"{summary_data['total_gb']:.1f} GB")}</div>
                     <div class="kpi-label">Total Volume</div>
                 </div>
                 <div class="kpi-box">
@@ -214,6 +214,7 @@ def main() -> None:
         eff_res = eff_engine.calculate_efficiency(start_ts, end_ts)
 
         hourly_df = repo.get_hourly_usage(start_ts, end_ts)
+        total_bytes = float(apps_df["total_bytes"].sum()) if not apps_df.empty and "total_bytes" in apps_df.columns else float(apps_df["total_gb"].sum() * (1024**3)) if not apps_df.empty else 0.0
         total_gb = float(apps_df["total_gb"].sum()) if not apps_df.empty else 0.0
         peak_mbps = float(hourly_df["mbps"].max()) if not hourly_df.empty else 0.0
 
@@ -221,6 +222,8 @@ def main() -> None:
             "start_ts": start_ts,
             "end_ts": end_ts,
             "total_gb": total_gb,
+            "total_bytes": total_bytes,
+            "total_volume_formatted": format_bytes(total_bytes),
             "peak_mbps": peak_mbps,
             "eff_score": eff_res["overall_score"],
             "eff_rating": eff_res["rating"],

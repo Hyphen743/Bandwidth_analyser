@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS bandwidth_usage (
     ts TEXT NOT NULL, -- ISO-8601 YYYY-MM-DD HH:MM:SS
     bytes_up INTEGER NOT NULL DEFAULT 0,
     bytes_down INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'simulated', -- 'live' or 'simulated'
     FOREIGN KEY (session_id) REFERENCES network_sessions(session_id) ON DELETE SET NULL,
     FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE,
     FOREIGN KEY (app_id) REFERENCES applications(app_id) ON DELETE CASCADE
@@ -62,7 +63,8 @@ CREATE TABLE IF NOT EXISTS network_metrics (
     jitter_ms REAL NOT NULL DEFAULT 0.0,
     packet_loss_pct REAL NOT NULL DEFAULT 0.0,
     capacity_mbps REAL NOT NULL DEFAULT 100.0,
-    utilization_pct REAL NOT NULL DEFAULT 0.0
+    utilization_pct REAL NOT NULL DEFAULT 0.0,
+    source TEXT NOT NULL DEFAULT 'simulated' -- 'live' or 'simulated'
 );
 
 -- 7. Alerts
@@ -118,12 +120,26 @@ CREATE TABLE IF NOT EXISTS hourly_aggregates (
     FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE
 );
 
+-- 12. Real Speed Tests
+CREATE TABLE IF NOT EXISTS speed_tests (
+    speed_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    download_mbps REAL NOT NULL,
+    upload_mbps REAL NOT NULL,
+    ping_ms REAL NOT NULL,
+    server TEXT
+);
+
 -- Indexes for performance on time-series queries
 CREATE INDEX IF NOT EXISTS idx_bandwidth_usage_ts ON bandwidth_usage(ts);
 CREATE INDEX IF NOT EXISTS idx_bandwidth_usage_app_ts ON bandwidth_usage(app_id, ts);
 CREATE INDEX IF NOT EXISTS idx_bandwidth_usage_dev_ts ON bandwidth_usage(device_id, ts);
+CREATE INDEX IF NOT EXISTS idx_bandwidth_usage_source ON bandwidth_usage(source);
 CREATE INDEX IF NOT EXISTS idx_network_metrics_ts ON network_metrics(ts);
+CREATE INDEX IF NOT EXISTS idx_network_metrics_source ON network_metrics(source);
 CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(ts);
 CREATE INDEX IF NOT EXISTS idx_predictions_target ON predictions(target_ts);
 CREATE INDEX IF NOT EXISTS idx_anomaly_labels_ts ON anomaly_labels(ts);
 CREATE INDEX IF NOT EXISTS idx_hourly_agg_ts ON hourly_aggregates(hour_ts);
+CREATE INDEX IF NOT EXISTS idx_speed_tests_ts ON speed_tests(ts);
+
