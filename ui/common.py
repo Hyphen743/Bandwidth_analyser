@@ -39,12 +39,15 @@ def setup_page(title: str, subtitle: Optional[str] = None) -> Tuple[DatabaseRepo
     inject_custom_css(dark_mode=dark_mode)
 
     # Page Header
-    st.markdown(f"""
-    <div style="margin-bottom: 1.5rem; padding-bottom: 0.75rem; border-bottom: 1px solid {'#383532' if dark_mode else '#EAE5DC'};">
-        <h1 style="margin: 0; font-size: 2.1rem; line-height: 1.2;">{title}</h1>
-        {f'<p style="margin: 0.35rem 0 0 0; color: {"#A8A29A" if dark_mode else "#78726A"}; font-size: 0.95rem;">{subtitle}</p>' if subtitle else ''}
-    </div>
-    """, unsafe_allow_html=True)
+    header_border = '#383532' if dark_mode else '#EAE5DC'
+    sub_color = '#A8A29A' if dark_mode else '#78726A'
+    sub_p = f'<p style="margin:0.35rem 0 0 0;color:{sub_color};font-size:0.95rem;">{subtitle}</p>' if subtitle else ''
+    header_html = (
+        f'<div style="margin-bottom:1.5rem;padding-bottom:0.75rem;border-bottom:1px solid {header_border};">'
+        f'<h1 style="margin:0;font-size:2.1rem;line-height:1.2;">{title}</h1>'
+        f'{sub_p}</div>'
+    )
+    st.markdown(header_html, unsafe_allow_html=True)
 
     # Sidebar
     filters = render_sidebar(repo)
@@ -54,16 +57,14 @@ def setup_page(title: str, subtitle: Optional[str] = None) -> Tuple[DatabaseRepo
 def render_sidebar(repo: DatabaseRepository) -> Dict[str, Any]:
     """Render unified navigation and filter controls in Streamlit sidebar."""
     with st.sidebar:
-        st.markdown("""
-        <div style="margin-bottom: 1.25rem;">
-            <div style="font-size: 1.2rem; font-weight: 700; font-family: 'Newsreader', Georgia, serif; color: #C8553D;">
-                BANDWIDTH ANALYZER
-            </div>
-            <div style="font-size: 0.75rem; color: #8C867E; letter-spacing: 0.05em; text-transform: uppercase;">
-                Network Telemetry & ML Suite
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        sidebar_logo_html = (
+            '<div style="margin-bottom:1.25rem;">'
+            '<div style="font-size:1.2rem;font-weight:700;font-family:\'Newsreader\',Georgia,serif;color:#C8553D;">'
+            'BANDWIDTH ANALYZER</div>'
+            '<div style="font-size:0.75rem;color:#8C867E;letter-spacing:0.05em;text-transform:uppercase;">'
+            'Network Telemetry & ML Suite</div></div>'
+        )
+        st.markdown(sidebar_logo_html, unsafe_allow_html=True)
 
         # Dark mode toggle
         dark_toggle = st.toggle("Dark Theme (Charcoal)", value=st.session_state.get("dark_mode", False))
@@ -177,25 +178,24 @@ def render_kpi(
     pill_html = ""
     if pill:
         pill_class = f"pill-{pill.lower()}"
-        pill_html = f'<div style="float: right;"><span class="status-pill {pill_class}">{pill}</span></div>'
+        pill_html = f'<div style="float:right;"><span class="status-pill {pill_class}">{pill}</span></div>'
 
     delta_html = ""
     if delta:
         delta_class = delta_type if delta_type in ("pos", "neg") else "neutral"
         delta_html = f'<div class="kpi-delta {delta_class}">{delta}</div>'
 
-    html = f"""
-    <div style="background-color: {surface}; border: 1px solid {border}; border-radius: 8px; padding: 1.1rem 1.25rem; margin-bottom: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.03);">
-        {pill_html}
-        <div style="font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: {subtext}; margin-bottom: 0.35rem; font-weight: 600;">
-            {title}
-        </div>
-        <div style="font-size: 1.95rem; font-weight: 700; color: {text}; font-family: 'Newsreader', Georgia, serif; line-height: 1.1;">
-            {value}
-        </div>
-        {delta_html}
-    </div>
-    """
+    html = (
+        f'<div style="background-color:{surface};border:1px solid {border};border-radius:8px;'
+        f'padding:1.1rem 1.25rem;margin-bottom:0.75rem;box-shadow:0 1px 3px rgba(0,0,0,0.03);">'
+        f'{pill_html}'
+        f'<div style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.05em;color:{subtext};'
+        f'margin-bottom:0.35rem;font-weight:600;">{title}</div>'
+        f'<div style="font-size:1.95rem;font-weight:700;color:{text};font-family:\'Newsreader\',Georgia,serif;'
+        f'line-height:1.1;">{value}</div>'
+        f'{delta_html}'
+        f'</div>'
+    )
     col.markdown(html, unsafe_allow_html=True)
 
 

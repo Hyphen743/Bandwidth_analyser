@@ -117,17 +117,19 @@ def main() -> None:
 
             col_a1, col_a2 = st.columns([4, 1])
             with col_a1:
-                st.markdown(f"""
-                <div style="padding: 0.5rem 0; border-bottom: 1px solid {'#383532' if dark_mode else '#EAE5DC'};">
-                    <span style="background-color: {badge_color}; color: #FFFFFF; font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 4px; font-weight: 700; text-transform: uppercase;">
-                        {sev}
-                    </span>
-                    <strong style="margin-left: 0.5rem;">{alert['reason']}</strong>
-                    <div style="font-size: 0.8rem; color: {'#A8A29A' if dark_mode else '#78726A'}; margin-top: 0.2rem;">
-                        Timestamp: {alert['ts']} | Entity: {alert['entity_name'] or 'Network Link'} | Value: {alert['value']:.1f} (Baseline: {alert['baseline']:.1f})
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                border_c = '#383532' if dark_mode else '#EAE5DC'
+                muted_c = '#A8A29A' if dark_mode else '#78726A'
+                entity_name = alert['entity_name'] or 'Network Link'
+                alert_html = (
+                    f'<div style="padding:0.5rem 0;border-bottom:1px solid {border_c};">'
+                    f'<span style="background-color:{badge_color};color:#FFFFFF;font-size:0.72rem;'
+                    f'padding:0.15rem 0.5rem;border-radius:4px;font-weight:700;text-transform:uppercase;">{sev}</span>'
+                    f'<strong style="margin-left:0.5rem;">{alert["reason"]}</strong>'
+                    f'<div style="font-size:0.8rem;color:{muted_c};margin-top:0.2rem;">'
+                    f'Timestamp: {alert["ts"]} | Entity: {entity_name} | Value: {alert["value"]:.1f} (Baseline: {alert["baseline"]:.1f})'
+                    f'</div></div>'
+                )
+                st.markdown(alert_html, unsafe_allow_html=True)
 
             with col_a2:
                 if is_ack:

@@ -52,11 +52,10 @@ def main() -> None:
     with c_btn3:
         status_color = "#5C8065" if collector.is_running() else "#A63D40"
         status_text = "COLLECTOR ACTIVE (SAMPLING EVERY 2S)" if collector.is_running() else "COLLECTOR PAUSED"
-        st.markdown(f"""
-        <div style="font-size: 0.8rem; font-weight: 600; color: {status_color}; padding-top: 0.6rem; letter-spacing: 0.05em;">
-            ● {status_text}
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="font-size:0.8rem;font-weight:600;color:{status_color};padding-top:0.6rem;letter-spacing:0.05em;">● {status_text}</div>',
+            unsafe_allow_html=True
+        )
 
     stats = collector.get_latest_stats()
 

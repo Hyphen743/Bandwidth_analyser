@@ -191,22 +191,16 @@ def main() -> None:
                 border = "#383532" if dark_mode else "#EAE5DC"
                 surface = "#272523" if dark_mode else "#FFFFFF"
                 text = "#EDE8E3" if dark_mode else "#2B2B2B"
-                st.markdown(f"""
-                <div style="background-color: {surface}; border: 1px solid {border}; border-radius: 8px; padding: 1rem 1.1rem; height: 100%;">
-                    <div style="font-size: 0.72rem; text-transform: uppercase; font-weight: 700; color: #C8553D;">
-                        {rec['priority']} Priority • {rec['category']}
-                    </div>
-                    <div style="font-size: 0.95rem; font-weight: 600; color: {text}; margin: 0.4rem 0;">
-                        {rec['title']}
-                    </div>
-                    <div style="font-size: 0.82rem; color: {'#A8A29A' if dark_mode else '#78726A'};">
-                        {rec['impact']}
-                    </div>
-                    <div style="font-size: 0.85rem; font-weight: 600; color: #5C8065; margin-top: 0.5rem;">
-                        Est. Savings: ~{rec['estimated_savings_gb']} GB
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                muted_c = '#A8A29A' if dark_mode else '#78726A'
+                card_html = (
+                    f'<div style="background-color:{surface};border:1px solid {border};border-radius:8px;padding:1rem 1.1rem;height:100%;">'
+                    f'<div style="font-size:0.72rem;text-transform:uppercase;font-weight:700;color:#C8553D;">{rec["priority"]} Priority \u2022 {rec["category"]}</div>'
+                    f'<div style="font-size:0.95rem;font-weight:600;color:{text};margin:0.4rem 0;">{rec["title"]}</div>'
+                    f'<div style="font-size:0.82rem;color:{muted_c};">{rec["impact"]}</div>'
+                    f'<div style="font-size:0.85rem;font-weight:600;color:#5C8065;margin-top:0.5rem;">Est. Savings: ~{rec["estimated_savings_gb"]} GB</div>'
+                    f'</div>'
+                )
+                st.markdown(card_html, unsafe_allow_html=True)
     else:
         st.success("No critical network optimizations required at this time.")
 
