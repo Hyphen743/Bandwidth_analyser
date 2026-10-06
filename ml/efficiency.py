@@ -151,7 +151,8 @@ class EfficiencyEngine:
                     })
 
             # Check cloud backup
-            cloud = app_df[app_df["name"].isin(["Google Drive", "Dropbox Backup"])]
+            name_col = "app_name" if "app_name" in app_df.columns else "name"
+            cloud = app_df[app_df[name_col].isin(["Google Drive", "Dropbox Backup"])]
             if not cloud.empty:
                 cloud_gb = cloud["total_bytes"].sum() / (1024.0 ** 3)
                 recs.append({

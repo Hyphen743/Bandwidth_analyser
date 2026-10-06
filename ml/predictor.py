@@ -17,7 +17,13 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error, root_mean_squared_error
-from statsmodels.tsa.holtwinters import ExponentialSmoothing
+
+try:
+    from statsmodels.tsa.holtwinters import ExponentialSmoothing
+    HAS_STATSMODELS = True
+except (ImportError, Exception):
+    ExponentialSmoothing = None
+    HAS_STATSMODELS = False
 
 from db.repository import DatabaseRepository
 
@@ -86,18 +92,23 @@ class BandwidthPredictor:
         }
 
         # 2. Holt-Winters Exponential Smoothing
-        try:
-            hw_model = ExponentialSmoothing(
-                y_train,
-                seasonal_periods=24,
-                trend="add",
-                seasonal="add",
-                initialization_method="estimated"
-            ).fit()
-            hw_preds = np.maximum(0, hw_model.forecast(test_hours))
-        except Exception as e:
-            logger.warning("Holt-Winters fitting failed: %s. Using moving average fallback.", e)
-            hw_preds = pd.Series(y_train).rolling(24, min_periods=1).mean().iloc[-test_hours:].values
+        hw_preds = None
+        if HAS_STATSMODELS and ExponentialSmoothing is not None:
+            try:
+                hw_model = ExponentialSmoothing(
+                    y_train,
+                    seasonal_periods=24,
+                    trend="add",
+                    seasonal="add",
+                    initialization_method="estimated"
+                ).fit()
+                hw_preds = np.maximum(0, hw_model.forecast(test_hours))
+            except Exception as e:
+                logger.debug("Statsmodels Holt-Winters failed: %s. Using native fallback.", e)
+                hw_preds = None
+
+        if hw_preds is None:
+            hw_preds = self._native_holt_winters(y_train, forecast_len=test_hours, season_len=24)
 
         results["Holt-Winters"] = {
             "mae": round(float(mean_absolute_error(y_test, hw_preds)), 2),
@@ -128,6 +139,41 @@ class BandwidthPredictor:
         }
 
         return results
+
+    @staticmethod
+    def _native_holt_winters(
+        series: np.ndarray,
+        forecast_len: int,
+        season_len: int = 24,
+        alpha: float = 0.3,
+        beta: float = 0.05,
+        gamma: float = 0.3
+    ) -> np.ndarray:
+        """Native pure-NumPy additive Holt-Winters exponential smoothing."""
+        n = len(series)
+        if n < season_len * 2:
+            return np.full(forecast_len, max(0.1, float(np.mean(series))))
+
+        level = float(np.mean(series[:season_len]))
+        trend = float((np.mean(series[season_len:2*season_len]) - np.mean(series[:season_len])) / season_len)
+        seasonals = [float(series[i] - level) for i in range(season_len)]
+
+        for i in range(season_len, n):
+            val = float(series[i])
+            last_level = level
+            last_season = seasonals[i % season_len]
+
+            level = alpha * (val - last_season) + (1.0 - alpha) * (last_level + trend)
+            trend = beta * (level - last_level) + (1.0 - beta) * trend
+            seasonals[i % season_len] = gamma * (val - level) + (1.0 - gamma) * last_season
+
+        forecast = []
+        for m in range(1, forecast_len + 1):
+            s_idx = (n + m - 1) % season_len
+            pred = level + m * trend + seasonals[s_idx]
+            forecast.append(max(0.1, float(pred)))
+
+        return np.array(forecast)
 
     def forecast_next_24h(self, df: pd.DataFrame, model_type: str = "Gradient Boosting") -> pd.DataFrame:
         """
@@ -172,7 +218,7 @@ class BandwidthPredictor:
                 "hour_of_day": h,
                 "day_of_week": d,
                 "is_weekend": is_w
-            }])
+            }])[feature_cols]
 
             p = float(max(0.1, model.predict(feat)[0]))
             preds.append(p)

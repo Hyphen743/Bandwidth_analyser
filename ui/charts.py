@@ -227,8 +227,7 @@ def build_heatmap_chart(
         colorscale=custom_colorscale,
         showscale=True,
         colorbar={
-            "title": "Avg Mbps",
-            "titleside": "right",
+            "title": {"text": "Avg Mbps", "side": "right"},
             "len": 0.85,
             "thickness": 12,
             "tickfont": {"size": 9}
