@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import textwrap
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -20,6 +21,14 @@ from accounts import ensure_account_schema
 from ui.auth_ui import render_logout, require_account
 
 
+@st.cache_resource(show_spinner=False)
+def _initialize_database(db_path: str) -> None:
+    """Create the local application schema once before any page reads it."""
+    from db.init_db import init_database
+
+    init_database(Path(db_path))
+
+
 def setup_page(title: str, subtitle: Optional[str] = None) -> Tuple[DatabaseRepository, Dict[str, Any]]:
     """
     Standard page initialization:
@@ -29,6 +38,7 @@ def setup_page(title: str, subtitle: Optional[str] = None) -> Tuple[DatabaseRepo
     - Returns (repo, filter_dict)
     """
     preferences_repo = DatabaseRepository()
+    _initialize_database(str(preferences_repo.db_path))
     ensure_account_schema(preferences_repo)
 
     # Session state initialization
