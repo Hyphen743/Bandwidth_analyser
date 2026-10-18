@@ -65,7 +65,7 @@ def main() -> None:
             height=300,
             dark_mode=dark_mode
         )
-        st.plotly_chart(heat_fig, use_container_width=True)
+        st.plotly_chart(heat_fig, width="stretch")
 
     # Peak vs Off-Peak & Weekday vs Weekend Row
     c1, c2 = st.columns([1.2, 1.0])
@@ -81,13 +81,18 @@ def main() -> None:
                 height=320,
                 dark_mode=dark_mode
             )
-            st.plotly_chart(bar_fig, use_container_width=True)
+            st.plotly_chart(bar_fig, width="stretch")
 
     with c2:
         st.subheader("Weekday vs Weekend Hourly Profiles")
         w_df = engine.get_weekday_vs_weekend(start_ts, end_ts)
         if not w_df.empty:
             pivot_w = w_df.pivot(index="hour_of_day", columns="day_type", values="avg_mbps").reset_index()
+            # Short live histories can contain only weekdays or only weekends.
+            # Keep both chart series present so Plotly does not raise KeyError.
+            for day_type in ("Weekday", "Weekend"):
+                if day_type not in pivot_w.columns:
+                    pivot_w[day_type] = 0.0
             w_fig = build_line_chart(
                 df=pivot_w,
                 x="hour_of_day",
@@ -97,7 +102,7 @@ def main() -> None:
                 height=320,
                 dark_mode=dark_mode
             )
-            st.plotly_chart(w_fig, use_container_width=True)
+            st.plotly_chart(w_fig, width="stretch")
 
     # Daily Series
     st.subheader("Daily Transferred Data Volume (GB)")
@@ -112,7 +117,7 @@ def main() -> None:
             height=300,
             dark_mode=dark_mode
         )
-        st.plotly_chart(daily_fig, use_container_width=True)
+        st.plotly_chart(daily_fig, width="stretch")
         download_csv_button(daily_df, filename="daily_bandwidth_trends.csv", label="Export Daily Data")
 
 

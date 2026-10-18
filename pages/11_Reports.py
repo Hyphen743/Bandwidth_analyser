@@ -21,7 +21,7 @@ from analytics.app_analysis import ApplicationAnalytics
 from analytics.device_analysis import DeviceAnalytics
 from ml.efficiency import EfficiencyEngine
 from ui.charts import build_donut_chart, build_line_chart
-from ui.common import download_csv_button, format_bytes, render_kpi, setup_page
+from ui.common import download_csv_button, render_kpi, setup_page
 
 st.set_page_config(page_title="Reports & Replay", page_icon="📑", layout="wide")
 
@@ -35,12 +35,12 @@ def generate_html_report(
 ) -> str:
     """Produce self-contained printable HTML executive report."""
     apps_rows = "".join([
-        f"<tr><td>{r['app_name']}</td><td>{r['category']}</td><td>{format_bytes(r['total_bytes'] if 'total_bytes' in r else r['total_gb'] * (1024**3))}</td></tr>"
+        f"<tr><td>{r['app_name']}</td><td>{r['category']}</td><td>{r['total_gb']:.2f} GB</td></tr>"
         for _, r in top_apps.head(5).iterrows()
     ]) if not top_apps.empty else "<tr><td colspan='3'>None</td></tr>"
 
     dev_rows = "".join([
-        f"<tr><td>{r['hostname']}</td><td>{r['user_name']}</td><td>{format_bytes(r['total_bytes'] if 'total_bytes' in r else r['total_gb'] * (1024**3))}</td></tr>"
+        f"<tr><td>{r['hostname']}</td><td>{r['user_name']}</td><td>{r['total_gb']:.2f} GB</td></tr>"
         for _, r in top_devices.head(5).iterrows()
     ]) if not top_devices.empty else "<tr><td colspan='3'>None</td></tr>"
 
@@ -84,7 +84,7 @@ def generate_html_report(
 
             <div class="kpi-grid">
                 <div class="kpi-box">
-                    <div class="kpi-val">{summary_data.get('total_volume_formatted', f"{summary_data['total_gb']:.1f} GB")}</div>
+                    <div class="kpi-val">{summary_data['total_gb']:.1f} GB</div>
                     <div class="kpi-label">Total Volume</div>
                 </div>
                 <div class="kpi-box">
@@ -214,7 +214,6 @@ def main() -> None:
         eff_res = eff_engine.calculate_efficiency(start_ts, end_ts)
 
         hourly_df = repo.get_hourly_usage(start_ts, end_ts)
-        total_bytes = float(apps_df["total_bytes"].sum()) if not apps_df.empty and "total_bytes" in apps_df.columns else float(apps_df["total_gb"].sum() * (1024**3)) if not apps_df.empty else 0.0
         total_gb = float(apps_df["total_gb"].sum()) if not apps_df.empty else 0.0
         peak_mbps = float(hourly_df["mbps"].max()) if not hourly_df.empty else 0.0
 
@@ -222,8 +221,6 @@ def main() -> None:
             "start_ts": start_ts,
             "end_ts": end_ts,
             "total_gb": total_gb,
-            "total_bytes": total_bytes,
-            "total_volume_formatted": format_bytes(total_bytes),
             "peak_mbps": peak_mbps,
             "eff_score": eff_res["overall_score"],
             "eff_rating": eff_res["rating"],
@@ -245,7 +242,7 @@ def main() -> None:
                 data=html_out.encode("utf-8"),
                 file_name="network_audit_report.html",
                 mime="text/html",
-                use_container_width=True
+                width="stretch"
             )
 
         with c2:
@@ -256,7 +253,7 @@ def main() -> None:
                     data=pdf_bytes,
                     file_name="network_audit_report.pdf",
                     mime="application/pdf",
-                    use_container_width=True
+                    width="stretch"
                 )
 
         st.markdown("<div style='margin-top: 1rem;'></div>", unsafe_allow_html=True)
@@ -272,13 +269,17 @@ def main() -> None:
         hourly_all = repo.get_hourly_usage(start_ts, end_ts)
         if not hourly_all.empty:
             timestamps = hourly_all["hour_bucket"].tolist()
-            step_idx = st.slider(
-                "Time Scrubber",
-                min_value=0,
-                max_value=len(timestamps) - 1,
-                value=len(timestamps) // 2,
-                step=1
-            )
+            if len(timestamps) > 1:
+                step_idx = st.slider(
+                    "Time Scrubber",
+                    min_value=0,
+                    max_value=len(timestamps) - 1,
+                    value=len(timestamps) // 2,
+                    step=1
+                )
+            else:
+                step_idx = 0
+                st.caption("Only one hourly sample is available; replay is showing that sample.")
             selected_ts = timestamps[step_idx]
 
             st.markdown(f"**Inspecting Timestamp:** `{selected_ts}`")
@@ -290,12 +291,13 @@ def main() -> None:
                     a.name AS app_name,
                     a.category,
                     d.hostname,
-                    ROUND((b.bytes_up + b.bytes_down) * 8.0 / (3600.0 * 1000.0 * 1000.0), 3) AS mbps,
-                    ROUND((b.bytes_up + b.bytes_down) / (1024.0 * 1024.0), 2) AS mb_total
+                    ROUND(SUM(b.bytes_up + b.bytes_down) * 8.0 / (3600.0 * 1000.0 * 1000.0), 3) AS mbps,
+                    ROUND(SUM(b.bytes_up + b.bytes_down) / (1024.0 * 1024.0), 2) AS mb_total
                 FROM bandwidth_usage b
                 JOIN applications a ON b.app_id = a.app_id
                 JOIN devices d ON b.device_id = d.device_id
-                WHERE b.ts = :ts
+                WHERE strftime('%Y-%m-%d %H:00:00', b.ts) = :ts
+                GROUP BY a.name, a.category, d.hostname
                 ORDER BY mb_total DESC;
                 """,
                 {"ts": selected_ts}
@@ -304,7 +306,7 @@ def main() -> None:
             if not hour_detail.empty:
                 r1, r2 = st.columns([1.5, 1.0])
                 with r1:
-                    st.dataframe(hour_detail, use_container_width=True, hide_index=True)
+                    st.dataframe(hour_detail, width="stretch", hide_index=True)
                 with r2:
                     fig_hour = build_donut_chart(
                         df=hour_detail.head(6),
@@ -314,7 +316,7 @@ def main() -> None:
                         height=280,
                         dark_mode=dark_mode
                     )
-                    st.plotly_chart(fig_hour, use_container_width=True)
+                    st.plotly_chart(fig_hour, width="stretch")
             else:
                 st.info("No recorded activity in this specific hour.")
         else:

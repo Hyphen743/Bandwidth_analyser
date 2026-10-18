@@ -20,31 +20,6 @@ import plotly.graph_objects as go
 from ui.theme import COLORWAY, WARM_PALETTE
 
 
-def get_plotly_theme(dark_mode: bool = False) -> Dict[str, Any]:
-    """Returns dedicated Plotly style configuration for light or dark mode."""
-    if dark_mode:
-        return {
-            "bg": "rgba(0,0,0,0)",
-            "surface": "rgba(0,0,0,0)",
-            "text": "#EDE8E0",
-            "muted": "#A39E94",
-            "grid": "#3A3632",
-            "line": "#4A4540",
-            "hover_bg": "#262422",
-            "hover_text": "#EDE8E0"
-        }
-    return {
-        "bg": "rgba(0,0,0,0)",
-        "surface": "rgba(0,0,0,0)",
-        "text": "#2B2B2B",
-        "muted": "#7E7870",
-        "grid": "#ECE6DC",
-        "line": "#D8D2C7",
-        "hover_bg": "#FFFFFF",
-        "hover_text": "#2B2B2B"
-    }
-
-
 def apply_custom_layout(
     fig: go.Figure,
     title: Optional[str] = None,
@@ -52,19 +27,22 @@ def apply_custom_layout(
     dark_mode: bool = False,
     show_legend: bool = True
 ) -> go.Figure:
-    """Apply separate light and dark Plotly templates with zero blue and readable contrast."""
-    theme = get_plotly_theme(dark_mode)
+    """Apply minimal styling, calm colors, clean typography, and subtle grid lines."""
+    bg = WARM_PALETTE["bg_dark"] if dark_mode else WARM_PALETTE["bg_light"]
+    surface = WARM_PALETTE["surface_dark"] if dark_mode else WARM_PALETTE["surface_light"]
+    text = WARM_PALETTE["text_dark"] if dark_mode else WARM_PALETTE["text_light"]
+    grid = "#3A3835" if dark_mode else "#ECE6DC"
 
     fig.update_layout(
         title={
             "text": title or "",
-            "font": {"family": "Newsreader, Georgia, serif", "size": 17, "color": theme["text"]},
+            "font": {"family": "Newsreader, Georgia, serif", "size": 17, "color": text},
             "x": 0.01,
             "xanchor": "left"
         },
-        paper_bgcolor=theme["bg"],
-        plot_bgcolor=theme["surface"],
-        font={"family": "Inter, sans-serif", "color": theme["text"], "size": 11},
+        paper_bgcolor=bg,
+        plot_bgcolor=surface,
+        font={"family": "Inter, sans-serif", "color": text, "size": 11},
         height=height,
         margin={"l": 40, "r": 30, "t": 45 if title else 20, "b": 35},
         showlegend=show_legend,
@@ -74,12 +52,12 @@ def apply_custom_layout(
             "y": 1.02,
             "xanchor": "right",
             "x": 1,
-            "font": {"size": 10, "color": theme["text"]}
+            "font": {"size": 10, "color": text}
         },
         colorway=COLORWAY,
         hoverlabel={
-            "bgcolor": theme["hover_bg"],
-            "font": {"family": "Inter, sans-serif", "size": 11, "color": theme["hover_text"]},
+            "bgcolor": surface,
+            "font": {"family": "Inter, sans-serif", "size": 11, "color": text},
             "bordercolor": WARM_PALETTE["terracotta"]
         }
     )
@@ -87,20 +65,18 @@ def apply_custom_layout(
     fig.update_xaxes(
         showgrid=True,
         gridwidth=1,
-        gridcolor=theme["grid"],
+        gridcolor=grid,
         zeroline=False,
-        linecolor=theme["line"],
-        tickfont={"size": 10, "color": theme["text"]},
-        title_font={"color": theme["text"]}
+        linecolor=grid,
+        tickfont={"size": 10, "color": text}
     )
     fig.update_yaxes(
         showgrid=True,
         gridwidth=1,
-        gridcolor=theme["grid"],
+        gridcolor=grid,
         zeroline=False,
-        linecolor=theme["line"],
-        tickfont={"size": 10, "color": theme["text"]},
-        title_font={"color": theme["text"]}
+        linecolor=grid,
+        tickfont={"size": 10, "color": text}
     )
     return fig
 

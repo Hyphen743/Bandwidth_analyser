@@ -72,7 +72,7 @@ def main() -> None:
         height=400,
         dark_mode=dark_mode
     )
-    st.plotly_chart(fig_fc, use_container_width=True)
+    st.plotly_chart(fig_fc, width="stretch")
 
     # Model Evaluation Comparison Table
     st.subheader("Model Evaluation on Test Holdout (7-Day Split)")
@@ -86,7 +86,7 @@ def main() -> None:
                 "MAPE (%)": f"{metrics['mape']:.1f}%",
                 "Evaluation Mode": "Time-based Walk-Forward (Zero Leakage)"
             })
-        st.dataframe(pd.DataFrame(eval_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(eval_rows), width="stretch", hide_index=True)
     else:
         st.info("Evaluation metrics unavailable for current dataset size.")
 
@@ -101,7 +101,7 @@ def main() -> None:
         "upper_bound": "95% Upper (Mbps)",
         "is_capacity_exceeded": "Capacity Warning"
     })
-    st.dataframe(display_fc, use_container_width=True, hide_index=True)
+    st.dataframe(display_fc, width="stretch", hide_index=True)
     download_csv_button(display_fc, filename="bandwidth_forecast_24h.csv", label="Export Forecast CSV")
 
 

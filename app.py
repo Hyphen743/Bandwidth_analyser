@@ -7,7 +7,6 @@ and High-Level Analytical Summaries.
 from __future__ import annotations
 
 import sys
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -22,7 +21,7 @@ from collector.live_collector import LiveCollector
 from db.repository import DatabaseRepository
 from ml.efficiency import EfficiencyEngine
 from ui.charts import build_bar_chart, build_donut_chart, build_line_chart
-from ui.common import download_csv_button, format_bytes, format_mbps, render_kpi, setup_page
+from ui.common import download_csv_button, render_kpi, setup_page
 
 # Page Config must be the first Streamlit command
 st.set_page_config(
@@ -57,7 +56,7 @@ def main() -> None:
         "SELECT COALESCE(SUM(bytes_up + bytes_down), 0) AS total_bytes FROM bandwidth_usage WHERE ts >= :today_start",
         {"today_start": f"{today_str} 00:00:00"}
     )
-    today_bytes = float(today_df.iloc[0]["total_bytes"] or 0) if not today_df.empty else 0.0
+    today_gb = round(float(today_df.iloc[0]["total_bytes"] or 0) / (1024.0 ** 3), 2) if not today_df.empty else 0.0
 
     # Alerts count
     alerts_df = repo.get_alerts(unacknowledged_only=True)
@@ -78,8 +77,8 @@ def main() -> None:
     render_kpi(
         col=c1,
         title="Current Throughput",
-        value=format_mbps(current_mbps),
-        delta=f"↑ {format_mbps(latest_live['mbps_up'])} | ↓ {format_mbps(latest_live['mbps_down'])}",
+        value=f"{current_mbps:.1f} Mbps",
+        delta=f"↑ {latest_live['mbps_up']:.1f} | ↓ {latest_live['mbps_down']:.1f}",
         delta_type="neutral"
     )
 
@@ -87,7 +86,7 @@ def main() -> None:
     render_kpi(
         col=c2,
         title="Today's Data Transferred",
-        value=format_bytes(today_bytes),
+        value=f"{today_gb:.2f} GB",
         delta=f"Active period volume",
         delta_type="neutral"
     )
@@ -114,69 +113,84 @@ def main() -> None:
     st.markdown("<div style='margin-top: 1rem;'></div>", unsafe_allow_html=True)
 
     # -------------------------------------------------------------------------
-    # Live Traffic Monitor + Auto-Refresh
+    # Live Traffic Monitor. Streamlit reruns this section without blocking the
+    # whole page, so KPI calculations and other dashboards remain responsive.
     # -------------------------------------------------------------------------
-    col_chart, col_side = st.columns([2.2, 1.0])
+    auto_refresh = st.checkbox(
+        "Enable Live Polling (3s)",
+        value=False,
+        key="dashboard_live_polling_opt_in_v2",
+    )
 
-    with col_chart:
-        st.subheader("Live Traffic Stream")
+    if (
+        filters["data_source"] == "live"
+        and auto_refresh
+        and not collector.is_running()
+        and not st.session_state.get("live_collector_manually_stopped", False)
+    ):
+        collector.start()
 
-        # Auto refresh toggle
-        auto_refresh = st.checkbox("Enable Live Polling (3s)", value=False)
+    @st.fragment(run_every=3 if auto_refresh else None)
+    def render_live_monitor() -> None:
+        col_chart, col_side = st.columns([2.2, 1.0])
+        with col_chart:
+            st.subheader("Live Traffic Stream")
+            if filters["data_source"] == "live":
+                samples = collector.get_recent_samples(60)
+                recent_sorted = pd.DataFrame(samples)
+                if not recent_sorted.empty:
+                    fresh_stats = collector.get_latest_stats()
+                    st.caption(
+                        f"Interface throughput: ↑ {fresh_stats['mbps_up']:.2f} Mbps · "
+                        f"↓ {fresh_stats['mbps_down']:.2f} Mbps · "
+                        f"Last sample {fresh_stats['last_sample_ts'] or 'waiting for first sample'}"
+                    )
+            else:
+                # Simulator records are hourly byte totals; convert them using
+                # one hour, and group by hour instead of treating totals as seconds.
+                recent_sorted = repo.query_df(
+                    """
+                    SELECT strftime('%Y-%m-%d %H:00:00', ts) AS ts_sec,
+                           SUM(bytes_up) * 8.0 / (3600.0 * 1000000.0) AS mbps_up,
+                           SUM(bytes_down) * 8.0 / (3600.0 * 1000000.0) AS mbps_down
+                    FROM bandwidth_usage
+                    WHERE ts BETWEEN :start_ts AND :end_ts
+                    GROUP BY strftime('%Y-%m-%d %H:00:00', ts)
+                    ORDER BY ts_sec DESC LIMIT 48
+                    """,
+                    {"start_ts": start_ts, "end_ts": end_ts},
+                ).sort_values("ts_sec")
+                if not recent_sorted.empty:
+                    recent_sorted = recent_sorted.rename(columns={"ts_sec": "ts"})
 
-        # Fetch recent usage
-        recent_history = repo.query_df(
-            """
-            SELECT 
-                strftime('%Y-%m-%d %H:%M:%S', ts) AS ts_sec,
-                ROUND(SUM(bytes_up) * 8.0 / (3600.0 * 1000.0 * 1000.0), 3) AS mbps_up,
-                ROUND(SUM(bytes_down) * 8.0 / (3600.0 * 1000.0 * 1000.0), 3) AS mbps_down,
-                ROUND(SUM(bytes_up + bytes_down) * 8.0 / (3600.0 * 1000.0 * 1000.0), 3) AS mbps_total
-            FROM bandwidth_usage
-            WHERE ts BETWEEN :start_ts AND :end_ts
-            GROUP BY ts
-            ORDER BY ts DESC
-            LIMIT 48;
-            """,
-            {"start_ts": start_ts, "end_ts": end_ts}
-        )
+            if not recent_sorted.empty:
+                x_col = "ts"
+                live_fig = build_line_chart(
+                    df=recent_sorted, x=x_col, y=["mbps_down", "mbps_up"],
+                    title="Recent Bandwidth (Mbps)", height=340, dark_mode=dark_mode,
+                )
+                st.plotly_chart(live_fig, width="stretch")
+                download_csv_button(recent_sorted, filename="recent_bandwidth.csv", label="Export Live Data")
+            else:
+                st.info("No network activity found for the selected time range. Start the live collector or broaden the range.")
 
-        if not recent_history.empty:
-            recent_sorted = recent_history.sort_values(by="ts_sec")
-            live_fig = build_line_chart(
-                df=recent_sorted,
-                x="ts_sec",
-                y=["mbps_down", "mbps_up"],
-                title="Recent Bandwidth (Mbps)",
-                height=340,
-                dark_mode=dark_mode
-            )
-            st.plotly_chart(live_fig, use_container_width=True)
-            download_csv_button(recent_sorted, filename="recent_bandwidth.csv", label="Export Live Data")
-        else:
-            st.info("No network activity found for the selected time range.")
+        with col_side:
+            st.subheader("Top 5 Applications")
+            top_apps_df = repo.get_top_apps(start_ts, end_ts, limit=5)
+            if not top_apps_df.empty:
+                donut_fig = build_donut_chart(
+                    df=top_apps_df, names="app_name", values="total_gb",
+                    height=300, dark_mode=dark_mode,
+                )
+                st.plotly_chart(donut_fig, width="stretch")
+                display_tbl = top_apps_df[["app_name", "category", "total_gb"]].rename(
+                    columns={"app_name": "Application", "category": "Category", "total_gb": "Volume (GB)"}
+                )
+                st.dataframe(display_tbl, width="stretch", hide_index=True)
+            else:
+                st.info("No application data available.")
 
-    with col_side:
-        st.subheader("Top 5 Applications")
-        top_apps_df = repo.get_top_apps(start_ts, end_ts, limit=5)
-
-        if not top_apps_df.empty:
-            donut_fig = build_donut_chart(
-                df=top_apps_df,
-                names="app_name",
-                values="total_gb",
-                height=300,
-                dark_mode=dark_mode
-            )
-            st.plotly_chart(donut_fig, use_container_width=True)
-
-            # Display mini table
-            display_tbl = top_apps_df[["app_name", "category", "total_gb"]].rename(
-                columns={"app_name": "Application", "category": "Category", "total_gb": "Volume (GB)"}
-            )
-            st.dataframe(display_tbl, use_container_width=True, hide_index=True)
-        else:
-            st.info("No application data available.")
+    render_live_monitor()
 
     # -------------------------------------------------------------------------
     # Optimization Quick Summary
@@ -203,12 +217,6 @@ def main() -> None:
                 st.markdown(card_html, unsafe_allow_html=True)
     else:
         st.success("No critical network optimizations required at this time.")
-
-    # Auto refresh trigger if enabled
-    if auto_refresh:
-        time.sleep(3)
-        st.rerun()
-
 
 if __name__ == "__main__":
     main()

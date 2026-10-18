@@ -124,19 +124,37 @@ class AnomalyEngine:
 
     def detect_isolation_forest(self, df: pd.DataFrame, contamination: float = 0.03) -> pd.DataFrame:
         """
-        Method 3: Scikit-learn Isolation Forest on multi-dimensional telemetry features.
+        Method 3: Isolation Forest on traffic volume, upload share, and cyclic time features.
         """
         if df.empty or len(df) < 20:
             return pd.DataFrame()
 
         data = df.copy()
-        feature_cols = ["mbps", "bytes_up", "bytes_down", "hour_of_day", "day_of_week"]
-        X = data[feature_cols].fillna(0)
+        mbps = pd.to_numeric(data["mbps"], errors="coerce").fillna(0).clip(lower=0)
+        bytes_up = pd.to_numeric(data["bytes_up"], errors="coerce").fillna(0).clip(lower=0)
+        bytes_down = pd.to_numeric(data["bytes_down"], errors="coerce").fillna(0).clip(lower=0)
+        hour = pd.to_numeric(data["hour_of_day"], errors="coerce").fillna(0)
+        weekday = pd.to_numeric(data["day_of_week"], errors="coerce").fillna(0)
+        total_bytes = bytes_up + bytes_down
+
+        # Avoid feeding multiple nearly identical raw byte/rate columns to the
+        # forest. Use total traffic magnitude, direction mix, and cyclic time
+        # so midnight/Monday are not treated as far from 23:00/Sunday.
+        X = pd.DataFrame({
+            "log_mbps": np.log1p(mbps),
+            "upload_share": bytes_up.div(total_bytes.where(total_bytes > 0)).fillna(0).clip(0, 1),
+            "hour_sin": np.sin(2 * np.pi * hour / 24),
+            "hour_cos": np.cos(2 * np.pi * hour / 24),
+            "weekday_sin": np.sin(2 * np.pi * weekday / 7),
+            "weekday_cos": np.cos(2 * np.pi * weekday / 7),
+        }, index=data.index).replace([np.inf, -np.inf], np.nan).fillna(0)
+
+        contamination = float(np.clip(contamination, 0.01, 0.5))
 
         model = IsolationForest(
             contamination=contamination,
             random_state=42,
-            n_estimators=100
+            n_estimators=200
         )
         preds = model.fit_predict(X)
         scores = model.decision_function(X)
@@ -144,16 +162,18 @@ class AnomalyEngine:
         data["anomaly_score"] = np.round(-scores, 3)
         data["is_anomaly"] = (preds == -1).astype(int)
 
-        # Baseline mean for display
+        # Keep a comparable hourly baseline for the chart and alert explanation.
         data["baseline_mean"] = data.groupby(["hour_of_day", "is_weekend"])["mbps"].transform("mean").round(2)
 
         def assign_severity(row: pd.Series) -> str:
             if not row["is_anomaly"]:
                 return "normal"
-            score = row["anomaly_score"]
-            if score >= 0.15:
+            baseline = max(float(row["baseline_mean"]), 0.1)
+            observed = max(float(row["mbps"]), 0.1)
+            deviation = max(observed / baseline, baseline / observed)
+            if deviation >= 4.0:
                 return "critical"
-            elif score >= 0.05:
+            elif deviation >= 2.0:
                 return "warn"
             return "info"
 

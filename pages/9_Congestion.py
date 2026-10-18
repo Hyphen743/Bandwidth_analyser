@@ -69,7 +69,7 @@ def main() -> None:
         height=360,
         dark_mode=dark_mode
     )
-    st.plotly_chart(cong_fig, use_container_width=True)
+    st.plotly_chart(cong_fig, width="stretch")
 
     # Correlation Matrix & Offender Attribution Row
     c_corr, c_offend = st.columns([1.1, 1.3])
@@ -79,12 +79,14 @@ def main() -> None:
         corr_matrix = analyzer.get_correlation_matrix(start_ts, end_ts)
         st.dataframe(
             corr_matrix.style.format("{:.2f}").background_gradient(cmap="Reds", vmin=0, vmax=1),
-            use_container_width=True
+            width="stretch"
         )
         st.caption("Strong positive correlation between utilization and latency/loss highlights severe bufferbloat.")
 
     with c_offend:
-        st.subheader("Top Contributing Offenders During Congestion")
+        st.subheader("Top Traffic During Congestion")
+        if filters["data_source"] == "live":
+            st.caption("Live interface totals are unattributed; these records cannot identify an offending application.")
         offenders_df = analyzer.attribute_congestion_offenders(start_ts, end_ts, limit=5)
         if not offenders_df.empty:
             st.dataframe(
@@ -95,7 +97,7 @@ def main() -> None:
                     "total_bytes": "Total Bytes",
                     "avg_mbps": "Throughput (Mbps)"
                 }),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
         else:

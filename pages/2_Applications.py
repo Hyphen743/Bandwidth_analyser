@@ -16,7 +16,7 @@ import streamlit as st
 
 from analytics.app_analysis import ApplicationAnalytics
 from ui.charts import build_bar_chart, build_donut_chart, build_line_chart
-from ui.common import download_csv_button, format_bytes, render_kpi, setup_page
+from ui.common import download_csv_button, render_kpi, setup_page
 
 st.set_page_config(page_title="Applications Analysis", page_icon="📦", layout="wide")
 
@@ -30,6 +30,12 @@ def main() -> None:
     start_ts = filters["start_ts"]
     end_ts = filters["end_ts"]
     app_filter = filters["app_filter"]
+
+    if filters["data_source"] == "live":
+        st.warning(
+            "Live mode measures total traffic for this computer. It cannot attribute bytes to individual apps; "
+            "the live record is labeled ‘Unattributed interface traffic’."
+        )
 
     engine = ApplicationAnalytics(repo)
     summary_df = engine.get_summary(start_ts, end_ts)
@@ -48,16 +54,13 @@ def main() -> None:
     lowest_app = extremes["lowest"]
 
     k1, k2, k3, k4 = st.columns(4)
-    total_bytes = summary_df["total_bytes"].sum() if "total_bytes" in summary_df.columns else summary_df["total_gb"].sum() * (1024**3)
-    render_kpi(k1, "Total App Volume", format_bytes(total_bytes), delta=f"{len(summary_df)} active applications")
+    total_gb = summary_df["total_gb"].sum()
+    render_kpi(k1, "Total App Volume", f"{total_gb:.1f} GB", delta=f"{len(summary_df)} active applications")
     if highest_app:
-        top_bytes = highest_app["total_bytes"] if "total_bytes" in highest_app else highest_app["total_gb"] * (1024**3)
-        render_kpi(k2, "Top Consumer", highest_app["app_name"], delta=f"{format_bytes(top_bytes)} ({highest_app['pct_contribution']}%)")
+        render_kpi(k2, "Top Consumer", highest_app["app_name"], delta=f"{highest_app['total_gb']:.1f} GB ({highest_app['pct_contribution']}%)")
     if lowest_app:
-        low_bytes = lowest_app["total_bytes"] if "total_bytes" in lowest_app else lowest_app["total_gb"] * (1024**3)
-        render_kpi(k3, "Lowest Consumer", lowest_app["app_name"], delta=f"{format_bytes(low_bytes)} ({lowest_app['pct_contribution']}%)")
-    avg_sample_bytes = summary_df['avg_bytes_per_sample'].mean() if 'avg_bytes_per_sample' in summary_df.columns else 0
-    render_kpi(k4, "Avg per Sample", format_bytes(avg_sample_bytes), delta="Payload granularity")
+        render_kpi(k3, "Lowest Consumer", lowest_app["app_name"], delta=f"{lowest_app['total_gb']:.2f} GB ({lowest_app['pct_contribution']}%)")
+    render_kpi(k4, "Avg per Sample", f"{summary_df['avg_bytes_per_sample'].mean() / 1024:.1f} KB", delta="Payload granularity")
 
     st.markdown("<div style='margin-top: 1rem;'></div>", unsafe_allow_html=True)
 
@@ -76,7 +79,7 @@ def main() -> None:
             height=360,
             dark_mode=dark_mode
         )
-        st.plotly_chart(bar_fig, use_container_width=True)
+        st.plotly_chart(bar_fig, width="stretch")
 
     with c2:
         st.subheader("Traffic Share by Category")
@@ -90,7 +93,7 @@ def main() -> None:
                 height=360,
                 dark_mode=dark_mode
             )
-            st.plotly_chart(cat_fig, use_container_width=True)
+            st.plotly_chart(cat_fig, width="stretch")
 
     # Application Timeline
     st.subheader("Application Hourly Timeline")
@@ -108,7 +111,7 @@ def main() -> None:
             height=320,
             dark_mode=dark_mode
         )
-        st.plotly_chart(time_fig, use_container_width=True)
+        st.plotly_chart(time_fig, width="stretch")
 
     # Detailed Table
     st.subheader("Application Details Table")
@@ -126,7 +129,7 @@ def main() -> None:
         "sample_count": "Samples"
     })
 
-    st.dataframe(table_display, use_container_width=True, hide_index=True)
+    st.dataframe(table_display, width="stretch", hide_index=True)
     download_csv_button(table_display, filename="application_analytics.csv", label="Export Applications CSV")
 
 

@@ -7,6 +7,7 @@ and layout styling for all 12 Streamlit pages.
 from __future__ import annotations
 
 import io
+import textwrap
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -15,6 +16,8 @@ import streamlit as st
 
 from db.repository import DatabaseRepository
 from ui.theme import inject_custom_css
+from accounts import ensure_account_schema
+from ui.auth_ui import render_logout, require_account
 
 
 def setup_page(title: str, subtitle: Optional[str] = None) -> Tuple[DatabaseRepository, Dict[str, Any]]:
@@ -25,53 +28,120 @@ def setup_page(title: str, subtitle: Optional[str] = None) -> Tuple[DatabaseRepo
     - Loads repository and sidebar filters
     - Returns (repo, filter_dict)
     """
-    repo = DatabaseRepository()
+    preferences_repo = DatabaseRepository()
+    ensure_account_schema(preferences_repo)
 
     # Session state initialization
     if "dark_mode" not in st.session_state:
-        saved_theme = repo.get_setting("theme_mode", "light")
+        saved_theme = preferences_repo.get_setting("theme_mode", "light")
         st.session_state["dark_mode"] = saved_theme == "dark"
 
     if "data_source" not in st.session_state:
-        st.session_state["data_source"] = repo.get_setting("data_source", "simulated")
+        st.session_state["data_source"] = preferences_repo.get_setting("data_source", "simulated")
+
+    repo = _repository_for_source(st.session_state["data_source"], preferences_repo)
 
     dark_mode = st.session_state["dark_mode"]
     inject_custom_css(dark_mode=dark_mode)
+    if not require_account(preferences_repo):
+        # Keep the existing theme, data-source, and filter controls available
+        # while signed out; only the protected dashboard content is gated.
+        render_sidebar(preferences_repo)
+        st.stop()
 
     # Page Header
-    header_border = '#383532' if dark_mode else '#EAE5DC'
-    sub_color = '#A8A29A' if dark_mode else '#78726A'
-    sub_p = f'<p style="margin:0.35rem 0 0 0;color:{sub_color};font-size:0.95rem;">{subtitle}</p>' if subtitle else ''
-    header_html = (
-        f'<div style="margin-bottom:1.5rem;padding-bottom:0.75rem;border-bottom:1px solid {header_border};">'
-        f'<h1 style="margin:0;font-size:2.1rem;line-height:1.2;">{title}</h1>'
-        f'{sub_p}</div>'
-    )
-    st.markdown(header_html, unsafe_allow_html=True)
+    st.markdown(f"""
+    <div style="margin-bottom: 1.5rem; padding-bottom: 0.75rem; border-bottom: 1px solid {'#383532' if dark_mode else '#EAE5DC'};">
+        <h1 style="margin: 0; font-size: 2.1rem; line-height: 1.2;">{title}</h1>
+        {f'<p style="margin: 0.35rem 0 0 0; color: {"#A8A29A" if dark_mode else "#78726A"}; font-size: 0.95rem;">{subtitle}</p>' if subtitle else ''}
+    </div>
+    """, unsafe_allow_html=True)
 
     # Sidebar
     filters = render_sidebar(repo)
+    if filters["data_source"] == "live":
+        from collector.live_collector import LiveCollector
+        collector = LiveCollector.get_instance(repo)
+        if not collector.is_running() and not st.session_state.get("live_collector_manually_stopped", False):
+            collector.start()
+        st.info(
+            "LIVE LOCAL DEVICE DATA: this view uses measurements collected on this computer. "
+            "Application byte totals and other devices/users cannot be reliably inferred from interface counters."
+        )
     return repo, filters
+
+
+def _repository_for_source(source: str, preferences_repo: DatabaseRepository) -> DatabaseRepository:
+    """Return an isolated repository for live measurements or simulated history."""
+    if source != "live":
+        return preferences_repo
+
+    import socket
+    import uuid
+    from db.init_db import init_database
+
+    # Start a clean series because the old shared DB may contain duplicate
+    # samples from multiple Streamlit processes. Keep that file intact for audit.
+    live_path = preferences_repo.db_path.parent / "bandwidth_live_v2.db"
+    live_repo = DatabaseRepository(live_path)
+    initialized = False
+    if live_path.exists() and live_path.stat().st_size > 0:
+        try:
+            initialized = live_repo.get_setting("live_database_initialized", "0") == "1"
+        except Exception:
+            initialized = False
+    if not initialized:
+        init_database(live_path)
+        with live_repo.get_connection() as conn:
+            conn.execute("DELETE FROM devices")
+            conn.execute("DELETE FROM users")
+            conn.execute("DELETE FROM applications")
+            conn.commit()
+
+        hostname = socket.gethostname()
+        try:
+            local_ip = socket.gethostbyname(hostname)
+        except OSError:
+            local_ip = "127.0.0.1"
+        mac = ":".join(f"{(uuid.getnode() >> shift) & 0xff:02x}" for shift in range(40, -1, -8))
+        live_repo.insert_device(None, f"This computer ({hostname})", mac, local_ip, "laptop")
+        for key in (
+            "capacity_mbps", "congestion_util_threshold", "latency_alert_threshold",
+            "packet_loss_threshold", "anomaly_z_threshold", "ping_host",
+            "collector_interval_sec", "theme_mode", "quiet_hours_enabled",
+            "quiet_hours_start", "quiet_hours_end", "desktop_notifications",
+            "monthly_device_budget_gb",
+        ):
+            value = preferences_repo.get_setting(key)
+            if value is not None:
+                live_repo.set_setting(key, value)
+        live_repo.set_setting("live_database_initialized", "1")
+    return live_repo
 
 
 def render_sidebar(repo: DatabaseRepository) -> Dict[str, Any]:
     """Render unified navigation and filter controls in Streamlit sidebar."""
+    preferences_repo = DatabaseRepository()
     with st.sidebar:
-        # Theme toggle at the very top of the sidebar
-        dark_toggle = st.toggle("🌙 Dark Mode (Charcoal)", value=st.session_state.get("dark_mode", False))
+        if st.session_state.get("account_id"):
+            render_logout()
+        st.markdown("""
+        <div style="margin-bottom: 1.25rem;">
+            <div style="font-size: 1.2rem; font-weight: 700; font-family: 'Newsreader', Georgia, serif; color: #C8553D;">
+                BANDWIDTH ANALYZER
+            </div>
+            <div style="font-size: 0.75rem; color: #8C867E; letter-spacing: 0.05em; text-transform: uppercase;">
+                Network Telemetry & ML Suite
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Dark mode toggle
+        dark_toggle = st.toggle("Dark Theme (Charcoal)", value=st.session_state.get("dark_mode", False))
         if dark_toggle != st.session_state.get("dark_mode", False):
             st.session_state["dark_mode"] = dark_toggle
-            repo.set_setting("theme_mode", "dark" if dark_toggle else "light")
+            preferences_repo.set_setting("theme_mode", "dark" if dark_toggle else "light")
             st.rerun()
-
-        sidebar_logo_html = (
-            '<div style="margin-top:0.4rem;margin-bottom:1.25rem;">'
-            '<div style="font-size:1.2rem;font-weight:700;font-family:\'Newsreader\',Georgia,serif;color:#C8553D;">'
-            'BANDWIDTH ANALYZER</div>'
-            '<div style="font-size:0.75rem;color:var(--text-muted);letter-spacing:0.05em;text-transform:uppercase;">'
-            'Network Telemetry & ML Suite</div></div>'
-        )
-        st.markdown(sidebar_logo_html, unsafe_allow_html=True)
 
         # Data Source Mode (Simulated vs Live)
         st.markdown("---")
@@ -84,8 +154,13 @@ def render_sidebar(repo: DatabaseRepository) -> Dict[str, Any]:
         )
         selected_source = "simulated" if "Simulated" in source_mode else "live"
         if selected_source != st.session_state.get("data_source"):
+            if selected_source == "simulated":
+                from collector.live_collector import LiveCollector
+                LiveCollector.get_instance(repo).stop()
+            else:
+                st.session_state["live_collector_manually_stopped"] = False
             st.session_state["data_source"] = selected_source
-            repo.set_setting("data_source", selected_source)
+            preferences_repo.set_setting("data_source", selected_source)
             st.rerun()
 
         st.markdown("---")
@@ -142,13 +217,19 @@ def render_sidebar(repo: DatabaseRepository) -> Dict[str, Any]:
 
         # Demo Reset Button
         st.markdown("---")
-        if st.button("Reload 90-Day Demo Data", use_container_width=True):
+        if st.button(
+            "Reload 90-Day Demo Data",
+            width="stretch",
+            disabled=st.session_state.get("data_source") == "live",
+        ):
             with st.spinner("Regenerating 90-day seasonal dataset..."):
                 from collector.simulator import NetworkSimulator
-                sim = NetworkSimulator(repo, days=90)
+                sim = NetworkSimulator(preferences_repo, days=90)
                 sim.generate()
                 st.success("Demo dataset refreshed!")
                 st.rerun()
+        if st.session_state.get("data_source") == "live":
+            st.caption("Live history starts fresh in this version; prior live history is preserved in bandwidth_live.db.")
 
     return {
         "start_ts": start_dt.strftime("%Y-%m-%d %H:%M:%S"),
@@ -156,7 +237,7 @@ def render_sidebar(repo: DatabaseRepository) -> Dict[str, Any]:
         "app_filter": None if selected_app == "All Applications" else selected_app,
         "device_filter": None if selected_device == "All Devices" else selected_device,
         "dark_mode": st.session_state.get("dark_mode", False),
-        "data_source": st.session_state.get("data_source", "simulated")
+        "data_source": st.session_state.get("data_source", "simulated"),
     }
 
 
@@ -178,25 +259,26 @@ def render_kpi(
     pill_html = ""
     if pill:
         pill_class = f"pill-{pill.lower()}"
-        pill_html = f'<div style="float:right;"><span class="status-pill {pill_class}">{pill}</span></div>'
+        pill_html = f'<div style="float: right;"><span class="status-pill {pill_class}">{pill}</span></div>'
 
     delta_html = ""
     if delta:
         delta_class = delta_type if delta_type in ("pos", "neg") else "neutral"
         delta_html = f'<div class="kpi-delta {delta_class}">{delta}</div>'
 
-    html = (
-        f'<div style="background-color:{surface};border:1px solid {border};border-radius:8px;'
-        f'padding:1.1rem 1.25rem;margin-bottom:0.75rem;box-shadow:0 1px 3px rgba(0,0,0,0.03);">'
-        f'{pill_html}'
-        f'<div style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.05em;color:{subtext};'
-        f'margin-bottom:0.35rem;font-weight:600;">{title}</div>'
-        f'<div style="font-size:1.95rem;font-weight:700;color:{text};font-family:\'Newsreader\',Georgia,serif;'
-        f'line-height:1.1;">{value}</div>'
-        f'{delta_html}'
-        f'</div>'
-    )
-    col.markdown(html, unsafe_allow_html=True)
+    html = textwrap.dedent(f"""
+    <div style="background-color: {surface}; border: 1px solid {border}; border-radius: 8px; padding: 1.1rem 1.25rem; margin-bottom: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.03);">
+        {pill_html}
+        <div style="font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: {subtext}; margin-bottom: 0.35rem; font-weight: 600;">
+            {title}
+        </div>
+        <div style="font-size: 1.95rem; font-weight: 700; color: {text}; font-family: 'Newsreader', Georgia, serif; line-height: 1.1;">
+            {value}
+        </div>
+        {delta_html}
+    </div>
+    """).strip()
+    col.html(html)
 
 
 def download_csv_button(
@@ -213,36 +295,5 @@ def download_csv_button(
         data=csv_bytes,
         file_name=filename,
         mime="text/csv",
-        use_container_width=False
+        width="content"
     )
-
-
-def format_bytes(num_bytes: Union[int, float], precision: int = 2) -> str:
-    """Format byte counts dynamically into B, KB, MB, GB, or TB."""
-    if num_bytes is None or pd.isna(num_bytes) or num_bytes == 0:
-        return "0 B"
-    num = float(num_bytes)
-    negative = num < 0
-    num = abs(num)
-    units = ["B", "KB", "MB", "GB", "TB", "PB"]
-    idx = 0
-    while num >= 1024.0 and idx < len(units) - 1:
-        num /= 1024.0
-        idx += 1
-    prefix = "-" if negative else ""
-    if idx == 0:
-        return f"{prefix}{int(num)} B"
-    return f"{prefix}{num:.{precision}f} {units[idx]}"
-
-
-def format_mbps(mbps: Union[int, float], precision: int = 2) -> str:
-    """Format throughput dynamically into Kbps, Mbps, or Gbps."""
-    if mbps is None or pd.isna(mbps) or mbps == 0:
-        return "0.0 Mbps"
-    val = float(mbps)
-    if val >= 1000.0:
-        return f"{val / 1000.0:.{precision}f} Gbps"
-    elif val < 1.0:
-        return f"{val * 1000.0:.{precision}f} Kbps"
-    return f"{val:.{precision}f} Mbps"
-

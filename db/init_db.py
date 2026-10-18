@@ -19,7 +19,7 @@ SCHEMA_PATH = BASE_DIR / "db" / "schema.sql"
 VIEWS_PATH = BASE_DIR / "db" / "views.sql"
 
 DEFAULT_SETTINGS = {
-    "capacity_mbps": "25.0",
+    "capacity_mbps": "100.0",
     "congestion_util_threshold": "80.0",
     "latency_alert_threshold": "60.0",
     "packet_loss_threshold": "3.0",
@@ -33,9 +33,7 @@ DEFAULT_SETTINGS = {
     "quiet_hours_end": "07:00",
     "desktop_notifications": "0",
     "data_source": "simulated",
-    "monthly_device_budget_gb": "50.0",
-    "auto_start_collector": "0",
-    "speedtest_auto_interval_min": "0"
+    "monthly_device_budget_gb": "50.0"
 }
 
 SEED_USERS = [
@@ -81,25 +79,6 @@ def init_database(db_file: Path = DB_PATH) -> None:
     conn = sqlite3.connect(str(db_file))
     try:
         conn.execute("PRAGMA foreign_keys = ON;")
-
-        # 0. Check and migrate existing tables before indices are applied
-        cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='bandwidth_usage';")
-        if cursor.fetchone():
-            cursor.execute("PRAGMA table_info(bandwidth_usage);")
-            bu_cols = [c[1] for c in cursor.fetchall()]
-            if "source" not in bu_cols:
-                logger.info("Migrating bandwidth_usage: adding source column...")
-                cursor.execute("ALTER TABLE bandwidth_usage ADD COLUMN source TEXT NOT NULL DEFAULT 'simulated';")
-
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='network_metrics';")
-        if cursor.fetchone():
-            cursor.execute("PRAGMA table_info(network_metrics);")
-            nm_cols = [c[1] for c in cursor.fetchall()]
-            if "source" not in nm_cols:
-                logger.info("Migrating network_metrics: adding source column...")
-                cursor.execute("ALTER TABLE network_metrics ADD COLUMN source TEXT NOT NULL DEFAULT 'simulated';")
-        conn.commit()
 
         # 1. Schema
         logger.info("Applying schema.sql...")

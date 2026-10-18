@@ -85,6 +85,7 @@ flowchart TD
 6. **Leaderboards & Shifts (`pages/6_Rankings.py`)**
    - Top 5 and Top 10 leaderboards for applications and devices.
    - Period-over-period rank tracking with delta arrows: `↑ +2`, `↓ -1`, `↔ 0`, or `NEW`.
+   - Account-based friend leaderboard with one-way friend-code relationships and actual collector-reported upload/download usage.
 
 7. **Multi-Method Anomaly Detection (`pages/7_Anomalies.py`)**
    - Three independent algorithms:
@@ -185,11 +186,27 @@ The application will open automatically at **`http://localhost:8501`**.
 
 Alternatively, on Windows run `run.bat` or on Linux/macOS run `./run.sh`.
 
+### Accounts, Friends, and Real Usage Sharing
+
+Create an account through the Sign Up tab. In **Rankings → Devices & Friends**, copy your friend code and enter a friend's code to follow them. The relationship is directional: each person must add the other person's code to see both sides. A friend code only discovers an account; it does not authorize access to metrics. Passwords are stored as salted scrypt hashes.
+
+The account, friend, and aggregate usage tables are added safely to the existing `data/bandwidth.db`; existing telemetry tables and files are retained. The ingestion API exposes no traffic-reading endpoint. It accepts usage samples only with a separate, revocable collector token.
+
+To run the shared backend locally for development, use two terminals in the project directory:
+
+```powershell
+python backend_api.py
+```
+
+```powershell
+python -m streamlit run app.py
+```
+
 ### 4. Running the Test Suite
 ```bash
 pytest tests/ -v
 ```
-All 20 unit tests will execute and validate the database repository, analytics engines, anomaly detectors, forecasting models, and efficiency algorithms.
+The focused account-ranking tests can be run with `pytest tests/test_live_collector_callback.py tests/test_account_friend_ranking.py -v`.
 
 ---
 

@@ -20,12 +20,12 @@ INSERT INTO network_sessions (device_id, app_id, start_ts, end_ts)
 VALUES (:device_id, :app_id, :start_ts, :end_ts);
 
 -- name: insert_bandwidth_usage
-INSERT INTO bandwidth_usage (session_id, device_id, app_id, ts, bytes_up, bytes_down, source)
-VALUES (:session_id, :device_id, :app_id, :ts, :bytes_up, :bytes_down, :source);
+INSERT INTO bandwidth_usage (session_id, device_id, app_id, ts, bytes_up, bytes_down)
+VALUES (:session_id, :device_id, :app_id, :ts, :bytes_up, :bytes_down);
 
 -- name: insert_network_metric
-INSERT INTO network_metrics (ts, latency_ms, jitter_ms, packet_loss_pct, capacity_mbps, utilization_pct, source)
-VALUES (:ts, :latency_ms, :jitter_ms, :packet_loss_pct, :capacity_mbps, :utilization_pct, :source);
+INSERT INTO network_metrics (ts, latency_ms, jitter_ms, packet_loss_pct, capacity_mbps, utilization_pct)
+VALUES (:ts, :latency_ms, :jitter_ms, :packet_loss_pct, :capacity_mbps, :utilization_pct);
 
 -- name: insert_alert
 INSERT INTO alerts (ts, entity_type, entity_id, severity, reason, value, baseline, acknowledged)
@@ -355,14 +355,3 @@ LEFT JOIN bandwidth_usage b ON d.device_id = b.device_id
     AND b.ts >= strftime('%Y-%m-01 00:00:00', :reference_ts)
     AND b.ts <= :reference_ts
 GROUP BY d.device_id, d.hostname, d.device_type, u.name;
-
--- name: insert_speed_test
-INSERT INTO speed_tests (ts, download_mbps, upload_mbps, ping_ms, server)
-VALUES (:ts, :download_mbps, :upload_mbps, :ping_ms, :server);
-
--- name: get_speed_tests
-SELECT speed_id, ts, download_mbps, upload_mbps, ping_ms, server
-FROM speed_tests
-ORDER BY ts DESC
-LIMIT :limit;
-

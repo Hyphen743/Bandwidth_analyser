@@ -153,8 +153,7 @@ class DatabaseRepository:
         app_id: int,
         ts: str,
         bytes_up: int,
-        bytes_down: int,
-        source: str = "simulated"
+        bytes_down: int
     ) -> int:
         return self.execute("insert_bandwidth_usage", {
             "session_id": session_id,
@@ -162,17 +161,13 @@ class DatabaseRepository:
             "app_id": app_id,
             "ts": ts,
             "bytes_up": bytes_up,
-            "bytes_down": bytes_down,
-            "source": source
+            "bytes_down": bytes_down
         })
 
     def insert_usage_batch(self, rows: List[Dict[str, Any]]) -> None:
         """Batch insert usage records for high performance."""
         if not rows:
             return
-        for r in rows:
-            if "source" not in r:
-                r["source"] = "simulated"
         sql = self.get_query("insert_bandwidth_usage")
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -186,8 +181,7 @@ class DatabaseRepository:
         jitter_ms: float,
         packet_loss_pct: float,
         capacity_mbps: float,
-        utilization_pct: float,
-        source: str = "simulated"
+        utilization_pct: float
     ) -> int:
         return self.execute("insert_network_metric", {
             "ts": ts,
@@ -195,43 +189,18 @@ class DatabaseRepository:
             "jitter_ms": jitter_ms,
             "packet_loss_pct": packet_loss_pct,
             "capacity_mbps": capacity_mbps,
-            "utilization_pct": utilization_pct,
-            "source": source
+            "utilization_pct": utilization_pct
         })
 
     def insert_metrics_batch(self, rows: List[Dict[str, Any]]) -> None:
         """Batch insert network metric records."""
         if not rows:
             return
-        for r in rows:
-            if "source" not in r:
-                r["source"] = "simulated"
         sql = self.get_query("insert_network_metric")
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.executemany(sql, rows)
             conn.commit()
-
-    def insert_speed_test(
-        self,
-        ts: str,
-        download_mbps: float,
-        upload_mbps: float,
-        ping_ms: float,
-        server: Optional[str] = None
-    ) -> int:
-        """Record real speed test measurements."""
-        return self.execute("insert_speed_test", {
-            "ts": ts,
-            "download_mbps": download_mbps,
-            "upload_mbps": upload_mbps,
-            "ping_ms": ping_ms,
-            "server": server or "Auto"
-        })
-
-    def get_speed_tests(self, limit: int = 50) -> pd.DataFrame:
-        """Fetch historical speed test measurements."""
-        return self.query_df("get_speed_tests", {"limit": limit})
 
     def insert_alert(
         self,

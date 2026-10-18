@@ -55,7 +55,15 @@ def main() -> None:
             det_df = engine.detect_iqr(hourly_df, factor=iqr_factor)
         else:
             contam = st.slider("Contamination Rate (%)", min_value=1.0, max_value=10.0, value=3.0, step=0.5) / 100.0
+            st.caption("The forest fits to the selected time range; this sets the approximate share it will flag. It needs at least 20 hourly samples.")
             det_df = engine.detect_isolation_forest(hourly_df, contamination=contam)
+
+    if det_df.empty:
+        st.info(
+            f"Isolation Forest needs at least 20 hourly samples. "
+            f"This time range has {len(hourly_df)}. Choose a longer time range to run it."
+        )
+        return
 
     anomalies_found = det_df[det_df["is_anomaly"] == 1]
     crit_count = len(anomalies_found[anomalies_found["severity"] == "critical"])
@@ -81,11 +89,15 @@ def main() -> None:
         height=380,
         dark_mode=dark_mode
     )
-    st.plotly_chart(timeline_fig, use_container_width=True)
+    st.plotly_chart(timeline_fig, width="stretch")
 
     # Ground-Truth Benchmark Evaluation Table
     st.subheader("Model Evaluation vs Ground-Truth Labels")
-    eval_results = engine.evaluate_against_ground_truth(start_ts, end_ts)
+    if filters["data_source"] == "live":
+        st.info("Ground-truth benchmark labels exist only for the simulated dataset. Live mode can show detected deviations, but has no pre-labeled real events for accuracy scoring.")
+        eval_results = {}
+    else:
+        eval_results = engine.evaluate_against_ground_truth(start_ts, end_ts)
 
     eval_rows = []
     for m_name, m_stats in eval_results.items():
@@ -99,9 +111,10 @@ def main() -> None:
             "False Negatives (FN)": m_stats["fn"]
         })
 
-    eval_df = pd.DataFrame(eval_rows)
-    st.dataframe(eval_df, use_container_width=True, hide_index=True)
-    st.caption("Evaluation benchmarked against injected synthetic ground truth (exfiltration, runaway updates, backup bursts, congestion).")
+    if eval_rows:
+        eval_df = pd.DataFrame(eval_rows)
+        st.dataframe(eval_df, width="stretch", hide_index=True)
+        st.caption("Evaluation benchmarked against injected synthetic ground truth (exfiltration, runaway updates, backup bursts, congestion).")
 
     # Interactive Alert Inbox & Acknowledgement
     st.markdown("<div style='margin-top: 1.5rem;'></div>", unsafe_allow_html=True)

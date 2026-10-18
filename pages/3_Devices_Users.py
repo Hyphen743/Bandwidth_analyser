@@ -16,7 +16,7 @@ import streamlit as st
 
 from analytics.device_analysis import DeviceAnalytics
 from ui.charts import build_bar_chart, build_donut_chart
-from ui.common import download_csv_button, format_bytes, render_kpi, setup_page
+from ui.common import download_csv_button, render_kpi, setup_page
 
 st.set_page_config(page_title="Devices & Users", page_icon="💻", layout="wide")
 
@@ -30,6 +30,9 @@ def main() -> None:
     start_ts = filters["start_ts"]
     end_ts = filters["end_ts"]
     dev_filter = filters["device_filter"]
+
+    if filters["data_source"] == "live":
+        st.info("Live mode reports this computer only. It does not discover or measure other devices or users on your network.")
 
     engine = DeviceAnalytics(repo)
     device_df = engine.get_device_summary(start_ts, end_ts)
@@ -48,16 +51,13 @@ def main() -> None:
 
     # KPIs
     k1, k2, k3, k4 = st.columns(4)
-    total_bytes = device_df["total_bytes"].sum() if "total_bytes" in device_df.columns else device_df["total_gb"].sum() * (1024**3)
+    total_gb = device_df["total_gb"].sum()
     render_kpi(k1, "Monitored Endpoints", f"{len(device_df)} Devices", delta=f"{len(user_df)} mapped users")
     if highest_dev:
-        top_bytes = highest_dev["total_bytes"] if "total_bytes" in highest_dev else highest_dev["total_gb"] * (1024**3)
-        render_kpi(k2, "Top Endpoint", highest_dev["hostname"], delta=f"{format_bytes(top_bytes)} ({highest_dev['pct_contribution']}%)")
+        render_kpi(k2, "Top Endpoint", highest_dev["hostname"], delta=f"{highest_dev['total_gb']:.1f} GB ({highest_dev['pct_contribution']}%)")
     if lowest_dev:
-        low_bytes = lowest_app_bytes = lowest_dev["total_bytes"] if "total_bytes" in lowest_dev else lowest_dev["total_gb"] * (1024**3)
-        render_kpi(k3, "Lowest Endpoint", lowest_dev["hostname"], delta=f"{format_bytes(lowest_app_bytes)} ({lowest_dev['pct_contribution']}%)")
-    avg_dev_bytes = device_df["total_bytes"].mean() if "total_bytes" in device_df.columns else device_df["total_gb"].mean() * (1024**3)
-    render_kpi(k4, "Avg Device Load", format_bytes(avg_dev_bytes), delta="Per-endpoint average")
+        render_kpi(k3, "Lowest Endpoint", lowest_dev["hostname"], delta=f"{lowest_dev['total_gb']:.2f} GB ({lowest_dev['pct_contribution']}%)")
+    render_kpi(k4, "Avg Device Load", f"{device_df['total_gb'].mean():.1f} GB", delta="Per-endpoint average")
 
     st.markdown("<div style='margin-top: 1rem;'></div>", unsafe_allow_html=True)
 
@@ -76,7 +76,7 @@ def main() -> None:
             height=340,
             dark_mode=dark_mode
         )
-        st.plotly_chart(bar_fig, use_container_width=True)
+        st.plotly_chart(bar_fig, width="stretch")
 
     with c2:
         st.subheader("Usage by User")
@@ -89,7 +89,7 @@ def main() -> None:
                 height=340,
                 dark_mode=dark_mode
             )
-            st.plotly_chart(user_fig, use_container_width=True)
+            st.plotly_chart(user_fig, width="stretch")
 
     # Unusual Device Consumption (Z-score spikes)
     st.subheader("Unusual Device Spikes (Historical Z-Score vs Own History)")
@@ -105,7 +105,7 @@ def main() -> None:
                 "z_score": "Z-Score",
                 "severity": "Severity"
             }),
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
     else:
@@ -127,7 +127,7 @@ def main() -> None:
         "gb_down": "Down (GB)",
         "pct_contribution": "Share (%)"
     })
-    st.dataframe(dev_display, use_container_width=True, hide_index=True)
+    st.dataframe(dev_display, width="stretch", hide_index=True)
     download_csv_button(dev_display, filename="devices_and_users.csv", label="Export Device Metrics")
 
 

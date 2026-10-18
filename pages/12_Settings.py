@@ -151,7 +151,7 @@ def main() -> None:
                 "status": "Budget Status"
             })
 
-            st.dataframe(display_budget, use_container_width=True, hide_index=True)
+            st.dataframe(display_budget, width="stretch", hide_index=True)
             download_csv_button(display_budget, filename="device_budgets.csv", label="Export Budget Report")
         else:
             st.info("No month-to-date traffic recorded.")

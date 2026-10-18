@@ -17,7 +17,7 @@ import streamlit as st
 
 from ml.efficiency import EfficiencyEngine
 from ui.charts import build_bar_chart
-from ui.common import download_csv_button, format_bytes, render_kpi, setup_page
+from ui.common import download_csv_button, render_kpi, setup_page
 
 st.set_page_config(page_title="Efficiency Scoring", page_icon="✨", layout="wide")
 
@@ -70,25 +70,21 @@ def main() -> None:
         height=280,
         dark_mode=dark_mode
     )
-    st.plotly_chart(fig_bar, use_container_width=True)
+    st.plotly_chart(fig_bar, width="stretch")
 
     # Cross-Entity Ratings
     st.subheader("Application Efficiency Scorecard")
     entity_eff_df = engine.compare_entities_efficiency(start_ts, end_ts)
     if not entity_eff_df.empty:
-        if "total_bytes" in entity_eff_df.columns:
-            entity_eff_df["volume_formatted"] = entity_eff_df["total_bytes"].apply(format_bytes)
-        else:
-            entity_eff_df["volume_formatted"] = (entity_eff_df["total_gb"] * (1024**3)).apply(format_bytes)
         st.dataframe(
             entity_eff_df.rename(columns={
                 "name": "Application",
                 "category": "Category",
-                "volume_formatted": "Volume",
+                "total_gb": "Volume (GB)",
                 "efficiency_score": "Efficiency Score (0-100)",
                 "rating": "Status"
-            })[["Application", "Category", "Volume", "Efficiency Score (0-100)", "Status"]],
-            use_container_width=True,
+            }),
+            width="stretch",
             hide_index=True
         )
 
@@ -109,7 +105,7 @@ def main() -> None:
                 "estimated_savings_gb": "Projected Monthly Savings (GB)",
                 "category": "Strategy Type"
             }),
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
 

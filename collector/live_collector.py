@@ -7,12 +7,15 @@ probes network latency/loss, and stores telemetry in SQLite.
 from __future__ import annotations
 
 import logging
+from collections import deque
+import socket
 import threading
 import time
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 # Ensure root directory is in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -29,11 +32,12 @@ logger = logging.getLogger("live_collector")
 class LiveCollector:
     """Background collector for real-time network traffic and telemetry."""
 
-    _instance: Optional["LiveCollector"] = None
+    _instances: Dict[str, "LiveCollector"] = {}
     _lock = threading.Lock()
 
-    def __init__(self, repo: Optional[DatabaseRepository] = None) -> None:
+    def __init__(self, repo: Optional[DatabaseRepository] = None, sample_callback: Optional[Callable[[Dict[str, Any]], None]] = None) -> None:
         self.repo = repo or DatabaseRepository()
+        self.sample_callback = sample_callback
         self.mapper = ProcessMapper()
         self.ping_probe = PingProbe(target_host=self.repo.get_setting("ping_host", "8.8.8.8"))
         self._stop_event = threading.Event()
@@ -53,14 +57,18 @@ class LiveCollector:
         self.current_utilization_pct: float = 0.0
         self.last_sample_ts: Optional[str] = None
         self.is_active: bool = False
+        self._sample_lock = threading.Lock()
+        self._samples = deque(maxlen=180)
 
     @classmethod
     def get_instance(cls, repo: Optional[DatabaseRepository] = None) -> "LiveCollector":
         """Singleton accessor for use across Streamlit pages."""
+        instance_repo = repo or DatabaseRepository()
+        key = str(instance_repo.db_path.resolve())
         with cls._lock:
-            if cls._instance is None:
-                cls._instance = LiveCollector(repo)
-            return cls._instance
+            if key not in cls._instances:
+                cls._instances[key] = LiveCollector(instance_repo)
+            return cls._instances[key]
 
     def _load_entity_cache(self) -> None:
         """Cache application and device IDs from database."""
@@ -76,7 +84,7 @@ class LiveCollector:
             logger.warning("Failed loading entity cache from DB: %s", e)
             self._device_id = 1
 
-    def _get_app_id(self, app_name: str, category: str = "browsing") -> int:
+    def _get_app_id(self, app_name: str, category: str = "browsing") -> Optional[int]:
         """Resolve or insert application ID."""
         key = app_name.lower()
         if key in self._app_cache:
@@ -85,11 +93,12 @@ class LiveCollector:
             new_id = self.repo.insert_application(app_name, category)
             self._app_cache[key] = new_id
             return new_id
-        except Exception:
-            return self._app_cache.get(list(self._app_cache.keys())[0], 1) if self._app_cache else 1
+        except Exception as e:
+            logger.warning("Failed resolving application %s: %s", app_name, e)
+            return None
 
     def start(self, interval_sec: Optional[float] = None) -> None:
-        """Start the collector thread in background."""
+        """Start the collector thread in the background."""
         if self._thread and self._thread.is_alive():
             logger.info("Collector thread already running.")
             return
@@ -97,7 +106,7 @@ class LiveCollector:
         interval = interval_sec or float(self.repo.get_setting("collector_interval_sec", "2.0"))
         self._stop_event.clear()
         self._thread = threading.Thread(
-            target=self._run_loop,
+            target=self._collect_loop,
             args=(interval,),
             name="LiveCollectorThread",
             daemon=True
@@ -131,20 +140,26 @@ class LiveCollector:
             "last_sample_ts": self.last_sample_ts
         }
 
-    def _run_loop(self, interval_sec: float) -> None:
-        """Main sampling loop."""
-        prev_io = psutil.net_io_counters()
+    def get_recent_samples(self, limit: int = 60) -> list[Dict[str, Any]]:
+        """Return the newest in-memory interface counter samples."""
+        with self._sample_lock:
+            return list(self._samples)[-limit:]
+
+    def _collect_loop(self, interval_sec: float) -> None:
+        """Sample interface counters until stopped."""
+        prev_io = psutil.net_io_counters(pernic=True)
         prev_time = time.time()
         ping_counter = 0
 
+        prev_sample_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         while not self._stop_event.is_set():
-            time.sleep(interval_sec)
+            if self._stop_event.wait(interval_sec):
+                break
             now_time = time.time()
             elapsed = max(0.001, now_time - prev_time)
 
-            current_io = psutil.net_io_counters()
-            bytes_sent_delta = max(0, current_io.bytes_sent - prev_io.bytes_sent)
-            bytes_recv_delta = max(0, current_io.bytes_recv - prev_io.bytes_recv)
+            current_io = psutil.net_io_counters(pernic=True)
+            bytes_sent_delta, bytes_recv_delta, _counter_notes = self._interface_deltas(prev_io, current_io)
 
             prev_io = current_io
             prev_time = now_time
@@ -156,7 +171,15 @@ class LiveCollector:
             self.current_mbps_down = mbps_down
 
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            sample_id = uuid.uuid4().hex
             self.last_sample_ts = now_str
+            with self._sample_lock:
+                self._samples.append({
+                    "ts": datetime.now().isoformat(timespec="seconds"),
+                    "mbps_up": mbps_up,
+                    "mbps_down": mbps_down,
+                    "mbps_total": mbps_up + mbps_down,
+                })
 
             # Periodic ping probe (every ~6 seconds)
             ping_counter += 1
@@ -183,36 +206,64 @@ class LiveCollector:
                 except Exception as e:
                     logger.debug("Failed saving live network metric: %s", e)
 
-            # Attribute traffic to active processes
-            active_procs = self.mapper.scan_active_connections()
-            if not active_procs:
-                continue
-
-            # Apportion bytes proportionally across discovered sockets
-            num_sockets = sum(p.get("connections_count", 1) for p in active_procs)
-            num_sockets = max(1, num_sockets)
-
-            usage_rows = []
-            for proc in active_procs:
-                weight = proc.get("connections_count", 1) / num_sockets
-                b_up = int(bytes_sent_delta * weight)
-                b_down = int(bytes_recv_delta * weight)
-                app_id = self._get_app_id(proc["app_name"], proc["category"])
-
-                usage_rows.append({
-                    "session_id": None,
-                    "device_id": self._device_id,
-                    "app_id": app_id,
-                    "ts": now_str,
-                    "bytes_up": b_up,
-                    "bytes_down": b_down
-                })
-
-            if usage_rows:
+            # Socket counts cannot tell us per-process byte totals. Persist the
+            # exact interface-counter delta as unattributed traffic instead of
+            # inventing per-app shares from connection counts.
+            app_id = self._get_app_id("Unattributed interface traffic", "other")
+            if app_id is not None:
                 try:
-                    self.repo.insert_usage_batch(usage_rows)
+                    self.repo.insert_usage_batch([{
+                        "session_id": None,
+                        "device_id": self._device_id,
+                        "app_id": app_id,
+                        "ts": now_str,
+                        "bytes_up": bytes_sent_delta,
+                        "bytes_down": bytes_recv_delta,
+                    }])
                 except Exception as e:
-                    logger.debug("Failed inserting live usage batch: %s", e)
+                    logger.warning("Failed inserting live interface usage: %s", e)
+
+            sample = {
+                "sample_id": sample_id,
+                "ts": now_str,
+                "bytes_up": bytes_sent_delta,
+                "bytes_down": bytes_recv_delta,
+                "hostname": socket.gethostname(),
+                "previous_sample_ts": prev_sample_ts,
+            }
+            if self.sample_callback:
+                try:
+                    self.sample_callback(sample)
+                except Exception:
+                    logger.warning("Live sample callback failed; local collection continues.", exc_info=True)
+            prev_sample_ts = now_str
+
+    @staticmethod
+    def _interface_deltas(previous: Dict[str, Any], current: Dict[str, Any]) -> tuple[int, int, list[str]]:
+        """Sum only per-interface increments; establish baselines for new adapters."""
+        sent = received = 0
+        notes: list[str] = []
+        prior_names, current_names = set(previous), set(current)
+        for name in sorted(current_names):
+            counters = current[name]
+            old = previous.get(name)
+            if old is None:
+                notes.append(f"New interface {name!r} baseline established; prior adapter counters were not counted.")
+                continue
+            for field, target in (("bytes_sent", "sent"), ("bytes_recv", "received")):
+                value = int(getattr(counters, field, 0))
+                prior_value = int(getattr(old, field, 0))
+                delta = value - prior_value if value >= prior_value else value
+                if value < prior_value:
+                    notes.append(f"Counter reset detected on {name!r}; restarted from the new baseline.")
+                if target == "sent":
+                    sent += delta
+                else:
+                    received += delta
+        removed = prior_names - current_names
+        if removed:
+            notes.append(f"Interface(s) disconnected: {', '.join(sorted(removed))}.")
+        return sent, received, notes
 
 
 if __name__ == "__main__":

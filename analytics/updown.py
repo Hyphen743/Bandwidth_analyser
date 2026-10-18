@@ -42,9 +42,6 @@ class UpDownAnalytics:
         pct_down = round((b_down / max(1, total)) * 100.0, 1)
 
         return {
-            "bytes_up": b_up,
-            "bytes_down": b_down,
-            "total_bytes": total,
             "gb_up": gb_up,
             "gb_down": gb_down,
             "total_gb": round(total / (1024.0 ** 3), 3),

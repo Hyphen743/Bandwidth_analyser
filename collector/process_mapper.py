@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+import socket
 from typing import Any, Dict, List, Optional, Tuple
 
 import psutil
@@ -18,25 +19,30 @@ logger = logging.getLogger("process_mapper")
 KNOWN_APP_MAPPINGS = {
     "chrome": ("Chrome Browser", "browsing"),
     "firefox": ("Firefox", "browsing"),
-    "msedge": ("Chrome Browser", "browsing"),
-    "brave": ("Chrome Browser", "browsing"),
+    "msedgewebview2": ("Microsoft Edge WebView2", "browsing"),
+    "msedge": ("Microsoft Edge", "browsing"),
+    "brave": ("Brave Browser", "browsing"),
     "slack": ("Slack Messaging", "social"),
     "discord": ("Discord", "VoIP"),
     "zoom": ("Zoom Meetings", "VoIP"),
-    "teams": ("Zoom Meetings", "VoIP"),
+    "teams": ("Microsoft Teams", "VoIP"),
     "steam": ("Steam Games", "gaming"),
-    "epicgames": ("Steam Games", "gaming"),
-    "spotify": ("YouTube", "streaming"),
-    "vlc": ("YouTube", "streaming"),
+    "epicgames": ("Epic Games", "gaming"),
+    "spotify": ("Spotify", "streaming"),
+    "vlc": ("VLC media player", "streaming"),
     "netflix": ("Netflix", "streaming"),
     "dropbox": ("Dropbox Backup", "cloud"),
     "googledrive": ("Google Drive", "cloud"),
-    "onedrive": ("Google Drive", "cloud"),
-    "svchost": ("Windows Update", "updates"),
+    "onedrive": ("OneDrive", "cloud"),
+    "svchost": ("Service Host", "system"),
     "trustedinstaller": ("Windows Update", "updates"),
     "system": ("System Packages", "updates"),
-    "python": ("Chrome Browser", "cloud"),
-    "code": ("Google Drive", "cloud")
+    "python": ("Python process", "development"),
+    "language_server": ("Language Server", "development"),
+    "codex": ("Codex Desktop", "productivity"),
+    "code": ("Visual Studio Code", "development"),
+    "chatgpt": ("ChatGPT", "productivity"),
+    "crossdeviceservice": ("Cross-Device Service", "system"),
 }
 
 KNOWN_PORTS = {
@@ -68,7 +74,7 @@ class ProcessMapper:
             self.cached_process_names[pid] = name
             return name
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            return "system"
+            return f"PID {pid} (name unavailable)"
 
     def map_to_app(self, proc_name: str) -> Tuple[str, str]:
         """Map process name to standardized application name and category."""
@@ -76,7 +82,8 @@ class ProcessMapper:
         for key, (app_name, category) in KNOWN_APP_MAPPINGS.items():
             if key in proc_lower:
                 return app_name, category
-        return "Chrome Browser", "browsing"
+        # Keep the executable visible rather than guessing an application.
+        return proc_name, "other"
 
     def scan_active_connections(self) -> List[Dict[str, Any]]:
         """
@@ -87,7 +94,7 @@ class ProcessMapper:
         try:
             connections = psutil.net_connections(kind="inet")
         except (psutil.AccessDenied, PermissionError) as e:
-            logger.warning("Access denied scanning net_connections: %s. Falling back.", e)
+            logger.warning("Access denied scanning net_connections: %s", e)
             connections = []
 
         seen_pids = defaultdict(lambda: {"count": 0, "remote_ips": set(), "ports": set()})
@@ -113,45 +120,25 @@ class ProcessMapper:
                 "ports": list(stats["ports"])
             })
 
-        if not active_items:
-            # Fallback for systems where connections scan is empty/restricted
-            for fallback_app, (app_name, category) in list(KNOWN_APP_MAPPINGS.items())[:3]:
-                active_items.append({
-                    "pid": 1001,
-                    "process_name": fallback_app,
-                    "app_name": app_name,
-                    "category": category,
-                    "connections_count": 2,
-                    "remote_ips": ["142.250.190.46"],
-                    "ports": [443]
-                })
-
         return active_items
 
     def get_protocol_distribution(self) -> Dict[str, float]:
         """
-        Returns estimated protocol breakdown (TCP / UDP / DNS / HTTPS)
-        derived from active sockets.
+        Return protocol shares calculated only from observed sockets.
         """
-        counts = {"HTTPS": 65.0, "TCP": 20.0, "UDP": 10.0, "DNS": 5.0}
         try:
             connections = psutil.net_connections(kind="inet")
-            raw_counts = defaultdict(int)
+            raw_counts: Dict[str, int] = defaultdict(int)
             for c in connections:
-                if c.type == 1:  # SOCK_STREAM
-                    if c.raddr and c.raddr.port in (443, 8443):
-                        raw_counts["HTTPS"] += 1
-                    else:
-                        raw_counts["TCP"] += 1
-                elif c.type == 2:  # SOCK_DGRAM
-                    if c.raddr and c.raddr.port == 53:
-                        raw_counts["DNS"] += 1
-                    else:
-                        raw_counts["UDP"] += 1
+                if c.type == socket.SOCK_STREAM and c.status == psutil.CONN_ESTABLISHED:
+                    raw_counts["HTTPS" if c.raddr and c.raddr.port in (443, 8443) else "TCP"] += 1
+                elif c.type == socket.SOCK_DGRAM and c.raddr:
+                    raw_counts["DNS" if c.raddr.port == 53 else "UDP"] += 1
 
             total = sum(raw_counts.values())
-            if total > 0:
-                counts = {k: round(v / total * 100.0, 1) for k, v in raw_counts.items()}
-        except Exception:
-            pass
-        return counts
+            if total == 0:
+                return {}
+            return {k: round(v / total * 100.0, 1) for k, v in raw_counts.items()}
+        except (psutil.AccessDenied, PermissionError) as e:
+            logger.warning("Access denied scanning protocol distribution: %s", e)
+            return {}
