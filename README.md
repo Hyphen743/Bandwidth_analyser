@@ -226,3 +226,5 @@ Located in [`research/research.ipynb`](file:///research/research.ipynb) with Mat
 - **Encrypted Payloads**: Modern web traffic uses TLS 1.3/HTTPS. Packet inspection attributes flows by socket connection metadata and process executable mappings rather than decrypting application payloads.
 - **Root/Admin Socket Capture**: Raw socket packet sniffing via Scapy requires administrator privileges. When run under standard user permissions, the application gracefully degrades to OS-level `psutil` socket connection mappings with zero crashes.
 - **Single-Host Concurrency**: SQLite with WAL mode operates with high efficiency for local workloads; for multi-gigabit corporate WAN infrastructures across thousands of probes, a distributed time-series database (TimescaleDB or ClickHouse) is recommended.
+#   b a n d w i d t h _ a n a l y z e  
+ 
