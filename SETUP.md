@@ -63,4 +63,16 @@ Then open [http://localhost:8501](http://localhost:8501). `run.sh` is also inclu
 - The Internet Speed Test needs internet access and downloads/uploads test data when run.
 - Packet capture through Scapy is optional and may require administrator/root privileges and OS-specific packet-capture support. The dashboard's normal live counter mode does not require Scapy.
 
+## Deployment-wide friend and device rankings
+
+The default friend list remains in the local SQLite account database. To share rankings across deployed users, configure a separate PostgreSQL database for the ranking feature. The application creates only `ba_shared_*` tables in that PostgreSQL database; the existing SQLite telemetry database, its schema, and the normal dashboards are not migrated or reset.
+
+1. Create a PostgreSQL database with a TLS connection URL. Do not commit the URL or put it in source control.
+2. Set `BANDWIDTH_SHARED_DATABASE_URL` as a secret for the Streamlit app and for the ingestion API service. Add `BANDWIDTH_API_URL` to the Streamlit app, for example `https://your-api-host.example/api/v1/usage`.
+3. Run `python backend_api.py` as a separate internet-facing service behind HTTPS. Configure its host platform to route HTTPS to the service's `PORT` (or set `BANDWIDTH_API_PORT`) and set `BANDWIDTH_API_HOST=0.0.0.0`. The API accepts authenticated collector samples only; it does not provide public account or ranking reads.
+4. Each user must sign in, open **Rankings** once to register their friend code in the shared ranking store, then share the code. Adding a code is directional, so each person adds the other's code to see both sides.
+5. In **Rankings**, create a collector token on each computer to include. Clone/download the project on that computer, install its requirements, then run the displayed `collector/friend_agent.py` command. Keep the process running while collecting. It measures aggregate byte deltas on that computer's default-route adapter and sends them over HTTPS.
+
+Without `BANDWIDTH_SHARED_DATABASE_URL`, the Rankings page keeps its existing local-only SQLite behavior. A separate deployed API and shared PostgreSQL database are required for different computers to contribute to one ranking. Per-application traffic is not inferred from adapter counters.
+
 The local database and collected history are computer-specific. The database is intentionally excluded from Git by `.gitignore`; each installation initializes its own database.

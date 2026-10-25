@@ -142,6 +142,14 @@ def main() -> None:
     def render_live_view() -> None:
         stats = collector.get_latest_stats()
 
+        if stats.get("network_interface"):
+            st.caption(
+                f"Upload/download counters: {stats['network_interface']} (default-route adapter). "
+                "Other adapters are excluded to avoid double-counting virtual or VPN layers."
+            )
+        else:
+            st.warning("Waiting to identify the active network adapter; usage is not being estimated from all adapters.")
+
         # Telemetry KPI Row
         k1, k2, k3, k4 = st.columns(4)
         render_kpi(k1, "Live Upload", f"{stats['mbps_up']:.2f} Mbps", delta="psutil counters", delta_type="neutral")

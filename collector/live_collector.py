@@ -55,6 +55,7 @@ class LiveCollector:
         self.current_jitter_ms: float = 0.0
         self.current_loss_pct: float = 0.0
         self.current_utilization_pct: float = 0.0
+        self.network_interface: Optional[str] = None
         self.last_sample_ts: Optional[str] = None
         self.is_active: bool = False
         self._sample_lock = threading.Lock()
@@ -137,6 +138,7 @@ class LiveCollector:
             "jitter_ms": round(self.current_jitter_ms, 1),
             "packet_loss_pct": round(self.current_loss_pct, 1),
             "utilization_pct": round(self.current_utilization_pct, 1),
+            "network_interface": self.network_interface,
             "last_sample_ts": self.last_sample_ts
         }
 
@@ -146,9 +148,11 @@ class LiveCollector:
             return list(self._samples)[-limit:]
 
     def _collect_loop(self, interval_sec: float) -> None:
-        """Sample interface counters until stopped."""
+        """Sample the default-route interface, avoiding overlapping adapter totals."""
         prev_io = psutil.net_io_counters(pernic=True)
         prev_time = time.time()
+        self.network_interface = self._resolve_default_route_interface(prev_io)
+        last_route_check = time.monotonic()
         ping_counter = 0
 
         prev_sample_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -159,10 +163,30 @@ class LiveCollector:
             elapsed = max(0.001, now_time - prev_time)
 
             current_io = psutil.net_io_counters(pernic=True)
-            bytes_sent_delta, bytes_recv_delta, _counter_notes = self._interface_deltas(prev_io, current_io)
+            if time.monotonic() - last_route_check >= 30:
+                selected_interface = self._resolve_default_route_interface(current_io)
+                last_route_check = time.monotonic()
+                if selected_interface != self.network_interface:
+                    self.network_interface = selected_interface
+                    prev_io = current_io
+                    prev_time = now_time
+                    logger.info("Live counter interface changed to %s; establishing a fresh baseline.", selected_interface)
+                    continue
+
+            bytes_sent_delta, bytes_recv_delta = self._single_interface_deltas(
+                prev_io, current_io, self.network_interface
+            )
 
             prev_io = current_io
             prev_time = now_time
+
+            # If the default route cannot be mapped to a local adapter, skip
+            # this interval instead of summing virtual interfaces and reporting
+            # an inflated volume as real usage.
+            if bytes_sent_delta is None or bytes_recv_delta is None:
+                self.current_mbps_up = 0.0
+                self.current_mbps_down = 0.0
+                continue
 
             # Compute Mbps
             mbps_up = (bytes_sent_delta * 8.0) / (elapsed * 1000.0 * 1000.0)
@@ -237,6 +261,47 @@ class LiveCollector:
                 except Exception:
                     logger.warning("Live sample callback failed; local collection continues.", exc_info=True)
             prev_sample_ts = now_str
+
+    @staticmethod
+    def _resolve_default_route_interface(counters: Dict[str, Any]) -> Optional[str]:
+        """Find the NIC used by the IPv4 default route without sending traffic."""
+        try:
+            host = "8.8.8.8"
+            try:
+                addresses = socket.getaddrinfo(host, 53, socket.AF_INET, socket.SOCK_DGRAM)
+                target = addresses[0][4][0]
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route_probe:
+                    route_probe.connect((target, 53))
+                    local_ip = route_probe.getsockname()[0]
+                for name, interface_addresses in psutil.net_if_addrs().items():
+                    if name in counters and any(
+                        address.family == socket.AF_INET and address.address == local_ip
+                        for address in interface_addresses
+                    ):
+                        return name
+            except (OSError, IndexError):
+                pass
+        except Exception as exc:
+            logger.debug("Could not resolve the active route interface: %s", exc)
+
+        # A single adapter is unambiguous (also supports restricted/test hosts).
+        if len(counters) == 1:
+            return next(iter(counters))
+        return None
+
+    @staticmethod
+    def _single_interface_deltas(
+        previous: Dict[str, Any], current: Dict[str, Any], interface: Optional[str]
+    ) -> tuple[Optional[int], Optional[int]]:
+        """Return byte deltas for one adapter; skip new/reset/missing baselines."""
+        if not interface or interface not in previous or interface not in current:
+            return None, None
+        old, new = previous[interface], current[interface]
+        sent_now, sent_before = int(new.bytes_sent), int(old.bytes_sent)
+        recv_now, recv_before = int(new.bytes_recv), int(old.bytes_recv)
+        if sent_now < sent_before or recv_now < recv_before:
+            return None, None
+        return sent_now - sent_before, recv_now - recv_before
 
     @staticmethod
     def _interface_deltas(previous: Dict[str, Any], current: Dict[str, Any]) -> tuple[int, int, list[str]]:

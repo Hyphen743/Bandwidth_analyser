@@ -16,7 +16,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
-from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error, root_mean_squared_error
+from sklearn.metrics import (
+    mean_absolute_error,
+    mean_absolute_percentage_error,
+    r2_score,
+    root_mean_squared_error,
+)
 
 try:
     from statsmodels.tsa.holtwinters import ExponentialSmoothing
@@ -41,7 +46,8 @@ class BandwidthPredictor:
         sql = """
         SELECT 
             strftime('%Y-%m-%d %H:00:00', ts) AS hour_ts,
-            ROUND(SUM(bytes_up + bytes_down) * 8.0 / (3600.0 * 1000.0 * 1000.0), 4) AS mbps
+            ROUND(SUM(bytes_up + bytes_down) * 8.0 / (3600.0 * 1000.0 * 1000.0), 4) AS mbps,
+            COUNT(*) AS sample_count
         FROM bandwidth_usage
         WHERE ts BETWEEN :start_ts AND :end_ts
         GROUP BY hour_ts
@@ -53,9 +59,11 @@ class BandwidthPredictor:
 
         df["dt"] = pd.to_datetime(df["hour_ts"])
         df = df.set_index("dt").asfreq("h")
-        df["mbps"] = df["mbps"].interpolate(method="linear").fillna(0.0)
+        # A missing hour means the collector was not running. Preserve the gap
+        # instead of inventing interpolated traffic for charts and forecasts.
+        df["mbps"] = df["mbps"].where(df["sample_count"].fillna(0) > 0)
         df["hour_ts"] = df.index.strftime("%Y-%m-%d %H:%M:%S")
-        return df.reset_index(drop=True)
+        return df.drop(columns=["sample_count"]).reset_index(drop=True)
 
     def evaluate_models(self, df: pd.DataFrame, test_hours: int = 168) -> Dict[str, Dict[str, Any]]:
         """
@@ -63,7 +71,7 @@ class BandwidthPredictor:
         using a strict time-based train/test split.
         test_hours defaults to 168 (1 week).
         """
-        if len(df) < test_hours + 48:
+        if len(df) < test_hours + 48 or df["mbps"].isna().any():
             return {}
 
         train_df = df.iloc[:-test_hours].copy()
@@ -87,7 +95,8 @@ class BandwidthPredictor:
         results["Seasonal Naive"] = {
             "mae": round(float(mean_absolute_error(y_test, naive_preds)), 2),
             "rmse": round(float(root_mean_squared_error(y_test, naive_preds)), 2),
-            "mape": round(float(mean_absolute_percentage_error(y_test, naive_preds) * 100.0), 2),
+            "mape": self._safe_mape(y_test, naive_preds),
+            "r2": round(float(r2_score(y_test, naive_preds)), 4),
             "predictions": naive_preds.tolist()
         }
 
@@ -113,7 +122,8 @@ class BandwidthPredictor:
         results["Holt-Winters"] = {
             "mae": round(float(mean_absolute_error(y_test, hw_preds)), 2),
             "rmse": round(float(root_mean_squared_error(y_test, hw_preds)), 2),
-            "mape": round(float(mean_absolute_percentage_error(y_test, hw_preds) * 100.0), 2),
+            "mape": self._safe_mape(y_test, hw_preds),
+            "r2": round(float(r2_score(y_test, hw_preds)), 4),
             "predictions": hw_preds.tolist()
         }
 
@@ -134,11 +144,23 @@ class BandwidthPredictor:
         results["Gradient Boosting"] = {
             "mae": round(float(mean_absolute_error(y_test, gb_preds)), 2),
             "rmse": round(float(root_mean_squared_error(y_test, gb_preds)), 2),
-            "mape": round(float(mean_absolute_percentage_error(y_test, gb_preds) * 100.0), 2),
+            "mape": self._safe_mape(y_test, gb_preds),
+            "r2": round(float(r2_score(y_test, gb_preds)), 4),
             "predictions": gb_preds.tolist()
         }
 
         return results
+
+    @staticmethod
+    def _safe_mape(y_true: np.ndarray, y_pred: np.ndarray) -> Optional[float]:
+        """MAPE over nonzero actuals; the metric is undefined when actual is zero."""
+        nonzero = np.asarray(y_true) != 0
+        if not np.any(nonzero):
+            return None
+        return round(
+            float(mean_absolute_percentage_error(np.asarray(y_true)[nonzero], np.asarray(y_pred)[nonzero]) * 100.0),
+            2,
+        )
 
     @staticmethod
     def _native_holt_winters(
@@ -180,51 +202,97 @@ class BandwidthPredictor:
         Generate next 24 hours of forecasts with upper/lower confidence bounds
         and link capacity limit comparison.
         """
-        if df.empty or len(df) < 48:
+        if df.empty:
+            return pd.DataFrame()
+
+        observed_mask = df["mbps"].notna().to_numpy()
+        valid_positions = np.flatnonzero(observed_mask)
+        if not len(valid_positions):
+            return pd.DataFrame()
+        end_position = int(valid_positions[-1])
+        start_position = end_position
+        while start_position > 0 and observed_mask[start_position - 1]:
+            start_position -= 1
+        # Forecast from the most recent continuous run only. Earlier gaps are
+        # retained in the chart and never filled with fabricated observations.
+        df = df.iloc[start_position:end_position + 1].reset_index(drop=True)
+        if len(df) < 49:
             return pd.DataFrame()
 
         last_dt = pd.to_datetime(df.iloc[-1]["hour_ts"])
         future_dts = [last_dt + timedelta(hours=i) for i in range(1, 25)]
         future_ts = [d.strftime("%Y-%m-%d %H:%M:%S") for d in future_dts]
 
-        # Use Gradient Boosting
-        ml_df = self._build_lag_features(df)
-        feature_cols = [c for c in ml_df.columns if c not in ("hour_ts", "mbps")]
-        clean_ml = ml_df.dropna()
+        values = df["mbps"].to_numpy(dtype=float)
+        timestamps = pd.to_datetime(df["hour_ts"]).reset_index(drop=True)
+        training_examples = len(values)
+        if model_type == "Seasonal Naive":
+            # Repeat the most recently observed daily profile.
+            preds_arr = np.maximum(0.0, values[-24:].copy())
+        elif model_type == "Holt-Winters":
+            if HAS_STATSMODELS and ExponentialSmoothing is not None:
+                try:
+                    fitted = ExponentialSmoothing(
+                        values,
+                        seasonal_periods=24,
+                        trend="add",
+                        seasonal="add",
+                        initialization_method="estimated",
+                    ).fit()
+                    preds_arr = np.maximum(0.0, fitted.forecast(24))
+                except Exception as exc:
+                    logger.debug("Holt-Winters forecast failed; using native fallback: %s", exc)
+                    preds_arr = self._native_holt_winters(values, forecast_len=24, season_len=24)
+            else:
+                preds_arr = self._native_holt_winters(values, forecast_len=24, season_len=24)
+        else:
+            # Refit from the latest observed continuous history on every
+            # forecast refresh. New collector samples therefore become new
+            # training examples; this is batch retraining, not online learning.
+            feature_columns = [
+                "lag_1", "lag_2", "lag_24", "rolling_mean_24", "rolling_std_24",
+                "hour_of_day", "day_of_week", "is_weekend", "horizon",
+            ]
+            train_features: list[dict[str, float]] = []
+            train_targets: list[float] = []
+            for origin in range(24, len(values) - 24):
+                observed = values[origin - 23:origin + 1]
+                for horizon in range(1, 25):
+                    target_index = origin + horizon
+                    target_time = timestamps.iloc[target_index]
+                    train_features.append({
+                        "lag_1": float(observed[-1]),
+                        "lag_2": float(observed[-2]),
+                        "lag_24": float(values[origin - 24]),
+                        "rolling_mean_24": float(np.mean(observed)),
+                        "rolling_std_24": float(np.std(observed)),
+                        "hour_of_day": float(target_time.hour),
+                        "day_of_week": float(target_time.dayofweek),
+                        "is_weekend": float(target_time.dayofweek >= 5),
+                        "horizon": float(horizon),
+                    })
+                    train_targets.append(float(values[target_index]))
 
-        model = HistGradientBoostingRegressor(max_iter=120, random_state=42)
-        model.fit(clean_ml[feature_cols], clean_ml["mbps"])
+            model = HistGradientBoostingRegressor(max_iter=120, random_state=42)
+            model.fit(pd.DataFrame(train_features, columns=feature_columns), train_targets)
+            training_examples = len(train_targets)
 
-        # Auto-regressive iterative forecasting for 24 steps
-        preds = []
-        recent_series = list(df["mbps"].values[-48:])
-
-        for dt in future_dts:
-            lag_1 = recent_series[-1]
-            lag_2 = recent_series[-2]
-            lag_24 = recent_series[-24]
-            rolling_mean_24 = float(np.mean(recent_series[-24:]))
-            rolling_std_24 = float(np.std(recent_series[-24:]))
-            h = dt.hour
-            d = dt.weekday()
-            is_w = 1 if d >= 5 else 0
-
-            feat = pd.DataFrame([{
-                "lag_1": lag_1,
-                "lag_2": lag_2,
-                "lag_24": lag_24,
-                "rolling_mean_24": rolling_mean_24,
-                "rolling_std_24": rolling_std_24,
-                "hour_of_day": h,
-                "day_of_week": d,
-                "is_weekend": is_w
-            }])[feature_cols]
-
-            p = float(max(0.1, model.predict(feat)[0]))
-            preds.append(p)
-            recent_series.append(p)
-
-        preds_arr = np.array(preds)
+            observed = values[-24:]
+            future_features = pd.DataFrame([
+                {
+                    "lag_1": float(observed[-1]),
+                    "lag_2": float(observed[-2]),
+                    "lag_24": float(values[-25]),
+                    "rolling_mean_24": float(np.mean(observed)),
+                    "rolling_std_24": float(np.std(observed)),
+                    "hour_of_day": float(dt.hour),
+                    "day_of_week": float(dt.weekday()),
+                    "is_weekend": float(dt.weekday() >= 5),
+                    "horizon": float(horizon),
+                }
+                for horizon, dt in enumerate(future_dts, start=1)
+            ], columns=feature_columns)
+            preds_arr = np.maximum(0.0, model.predict(future_features))
         capacity_mbps = float(self.repo.get_setting("capacity_mbps", "100.0"))
 
         # Std error proxy based on recent historical volatility
@@ -239,6 +307,8 @@ class BandwidthPredictor:
             "is_capacity_exceeded": (preds_arr >= capacity_mbps * 0.85).astype(int),
             "model": model_type
         })
+        forecast_df.attrs["training_examples"] = training_examples
+        forecast_df.attrs["trained_through"] = str(df.iloc[-1]["hour_ts"])
 
         # Log predictions to database
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

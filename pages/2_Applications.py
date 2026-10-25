@@ -34,7 +34,8 @@ def main() -> None:
     if filters["data_source"] == "live":
         st.warning(
             "Live mode measures total traffic for this computer. It cannot attribute bytes to individual apps; "
-            "the live record is labeled ‘Unattributed interface traffic’."
+            "the live record is labeled ‘Unattributed interface traffic’. Totals now use the default-route "
+            "adapter only; earlier all-adapter live history is preserved separately and is not mixed into this series."
         )
 
     engine = ApplicationAnalytics(repo)
@@ -102,12 +103,18 @@ def main() -> None:
 
     timeline_df = engine.get_app_timeline(start_ts, end_ts, app_id=app_id)
     if not timeline_df.empty:
+        # Show hourly totals in decimal megabytes so Plotly does not abbreviate
+        # raw byte counts as values such as "400M" (400 million bytes).
+        timeline_chart_df = timeline_df.copy()
+        for column in ("bytes_down", "bytes_up"):
+            timeline_chart_df[column] = timeline_chart_df[column] / 1_000_000
+
         time_fig = build_line_chart(
-            df=timeline_df,
+            df=timeline_chart_df,
             x="hour_ts",
             y=["bytes_down", "bytes_up"],
-            title=f"Hourly Payload: {selected_app_row['app_name']} (Bytes)",
-            y_label="Bytes",
+            title=f"Hourly Payload: {selected_app_row['app_name']} (MB)",
+            y_label="Data transferred (MB per hour)",
             height=320,
             dark_mode=dark_mode
         )
@@ -118,7 +125,10 @@ def main() -> None:
     table_display = summary_df[[
         "app_name", "category", "total_gb", "gb_up", "gb_down",
         "up_down_ratio", "pct_contribution", "sample_count"
-    ]].rename(columns={
+    ]].copy()
+    for column in ("total_gb", "gb_up", "gb_down", "up_down_ratio"):
+        table_display[column] = table_display[column].round(2)
+    table_display = table_display.rename(columns={
         "app_name": "Application",
         "category": "Category",
         "total_gb": "Total (GB)",
@@ -126,9 +136,12 @@ def main() -> None:
         "gb_down": "Down (GB)",
         "up_down_ratio": "Up/Down Ratio",
         "pct_contribution": "Share (%)",
-        "sample_count": "Samples"
+        "sample_count": "Collector Samples"
     })
 
+    st.caption(
+        "Totals cover the selected date range. Collector Samples are measurement intervals, not app launches or connections."
+    )
     st.dataframe(table_display, width="stretch", hide_index=True)
     download_csv_button(table_display, filename="application_analytics.csv", label="Export Applications CSV")
 

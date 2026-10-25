@@ -394,6 +394,43 @@ def inject_custom_css(dark_mode: bool = False) -> None:
         section[data-testid="stSidebar"] h3 {{
             font-size: 1.1rem;
         }}
+        /* Keep Streamlit's built-in "View more / View less" navigation control
+           readable like the other sidebar links in both themes. */
+        [data-testid="stSidebar"] [data-testid="stSidebarNav"] button,
+        [data-testid="stSidebar"] [data-testid="stSidebarNav"] button *,
+        [data-testid="stSidebarNav"],
+        [data-testid="stSidebarNav"] *,
+        [data-testid="stSidebar"] [role="button"],
+        [data-testid="stSidebar"] [role="button"] *,
+        [data-testid="stSidebar"] button[aria-label*="view" i],
+        [data-testid="stSidebar"] button[aria-label*="view" i] * {{
+            color: {text} !important;
+            font-family: 'Inter', sans-serif !important;
+            opacity: 1 !important;
+            filter: none !important;
+        }}
+        [data-testid="stSidebar"] [data-testid="stSidebarNav"] button {{
+            background-color: transparent !important;
+            display: flex !important;
+            align-items: center !important;
+            width: 100% !important;
+            text-align: left !important;
+        }}
+        [data-testid="stSidebar"] [data-testid="stSidebarNav"] button::after {{
+            content: "⌄";
+            color: {text} !important;
+            font-size: 1.15rem;
+            line-height: 1;
+            margin-left: auto;
+            padding-left: 0.5rem;
+        }}
+        [data-testid="stSidebarNav"]:has(a[data-testid="stSidebarNavLink"][href$="/Efficiency"]) [data-testid="stSidebarNavViewButton"]::after {{
+            content: "⌃";
+        }}
+        [data-testid="stSidebar"] [data-testid="stSidebarNav"] button:hover {{
+            color: {terracotta} !important;
+            background-color: {bg} !important;
+        }}
         section[data-testid="stSidebar"] [data-testid="stRadio"] label,
         section[data-testid="stSidebar"] [data-testid="stCheckbox"] label,
         section[data-testid="stSidebar"] [role="radio"],

@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import textwrap
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -20,6 +21,14 @@ from accounts import ensure_account_schema
 from ui.auth_ui import render_logout, require_account
 
 
+@st.cache_resource(show_spinner=False)
+def _initialize_database(db_path: str) -> None:
+    """Create the local application schema once before any page reads it."""
+    from db.init_db import init_database
+
+    init_database(Path(db_path))
+
+
 def setup_page(title: str, subtitle: Optional[str] = None) -> Tuple[DatabaseRepository, Dict[str, Any]]:
     """
     Standard page initialization:
@@ -29,6 +38,7 @@ def setup_page(title: str, subtitle: Optional[str] = None) -> Tuple[DatabaseRepo
     - Returns (repo, filter_dict)
     """
     preferences_repo = DatabaseRepository()
+    _initialize_database(str(preferences_repo.db_path))
     ensure_account_schema(preferences_repo)
 
     # Session state initialization
@@ -80,9 +90,10 @@ def _repository_for_source(source: str, preferences_repo: DatabaseRepository) ->
     import uuid
     from db.init_db import init_database
 
-    # Start a clean series because the old shared DB may contain duplicate
-    # samples from multiple Streamlit processes. Keep that file intact for audit.
-    live_path = preferences_repo.db_path.parent / "bandwidth_live_v2.db"
+    # Start a clean series because prior collectors summed every adapter,
+    # including virtual/VPN layers that can mirror the same traffic. Keep all
+    # earlier live databases intact for audit; new samples use one routed NIC.
+    live_path = preferences_repo.db_path.parent / "bandwidth_live_v3.db"
     live_repo = DatabaseRepository(live_path)
     initialized = False
     if live_path.exists() and live_path.stat().st_size > 0:

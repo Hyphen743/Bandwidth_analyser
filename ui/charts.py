@@ -321,7 +321,8 @@ def build_forecast_chart(
         mode="lines",
         line={"width": 0},
         showlegend=False,
-        hoverinfo="skip"
+        hoverinfo="skip",
+        connectgaps=False
     ))
     fig.add_trace(go.Scatter(
         x=forecast_df["target_ts"],
@@ -330,17 +331,27 @@ def build_forecast_chart(
         line={"width": 0},
         fill="tonexty",
         fillcolor="rgba(224, 164, 88, 0.20)",
-        name="95% Confidence Band"
+        name="Recent Variation",
+        connectgaps=False
     ))
 
-    # Predicted trace (terracotta dashed)
+    # Start the projection at the latest observed point, then draw a clean
+    # forecast line without a marker at every hourly prediction.
+    observed = historical_df.dropna(subset=["mbps"])
+    forecast_x = forecast_df["target_ts"].tolist()
+    forecast_y = forecast_df["predicted_mbps"].tolist()
+    if not observed.empty:
+        forecast_x.insert(0, observed.iloc[-1]["hour_ts"])
+        forecast_y.insert(0, float(observed.iloc[-1]["mbps"]))
+
     fig.add_trace(go.Scatter(
-        x=forecast_df["target_ts"],
-        y=forecast_df["predicted_mbps"],
-        mode="lines+markers",
+        x=forecast_x,
+        y=forecast_y,
+        mode="lines",
         name="Predicted Demand",
-        line={"width": 2.5, "dash": "dash", "color": WARM_PALETTE["terracotta"]},
-        marker={"size": 4, "color": WARM_PALETTE["terracotta"]}
+        line={"width": 2.8, "color": WARM_PALETTE["terracotta"]},
+        connectgaps=False,
+        hovertemplate="%{x|%a, %d %b %H:%M}<br>Forecast: %{y:.2f} Mbps<extra></extra>"
     ))
 
     # Capacity threshold line (dark red solid)
@@ -357,6 +368,7 @@ def build_forecast_chart(
 
     fig = apply_custom_layout(fig, title=title, height=height, dark_mode=dark_mode)
     fig.update_yaxes(title_text="Mbps")
+    fig.update_xaxes(tickformat="%d %b %H:%M", nticks=8, tickangle=0)
     return fig
 
 

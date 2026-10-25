@@ -35,15 +35,38 @@ def main() -> None:
     predictor = BandwidthPredictor(repo)
     series_df = predictor.prepare_series(start_ts, end_ts)
 
-    if series_df.empty or len(series_df) < 48:
-        st.warning("Insufficient historical data for forecasting. Please broaden your date range.")
+    if series_df.empty or len(series_df) < 49:
+        st.warning("Insufficient historical data for forecasting. At least 49 hourly observations are needed; broaden your date range.")
         return
 
     # Capacity setting
     capacity_mbps = float(repo.get_setting("capacity_mbps", "100.0"))
 
-    # Generate 24h forecast
-    forecast_df = predictor.forecast_next_24h(series_df, model_type="Gradient Boosting")
+    selected_model = st.selectbox(
+        "Forecast model",
+        [
+            "Gradient Boosting (retrained on refresh)",
+            "Holt-Winters",
+            "Seasonal Naive",
+        ],
+        help=(
+            "Gradient Boosting is batch-retrained from the latest observed history whenever this page refreshes. "
+            "It learns from newly collected samples but does not retain model weights between runs."
+        ),
+    )
+    forecast_df = predictor.forecast_next_24h(series_df, model_type=selected_model)
+    if forecast_df.empty:
+        st.warning(
+            "Forecast unavailable: this view needs at least 49 consecutive observed hourly samples. "
+            "Unmonitored hours are left as gaps instead of being filled with invented traffic."
+        )
+        return
+
+    st.caption(
+        f"Model: {selected_model} · trained through {forecast_df.attrs.get('trained_through', 'unknown')} · "
+        f"{forecast_df.attrs.get('training_examples', 0):,} training examples. "
+        "Newly collected data is used the next time this forecast is recalculated."
+    )
 
     # Evaluate models on test split
     eval_results = predictor.evaluate_models(series_df, test_hours=168)
@@ -68,11 +91,12 @@ def main() -> None:
         historical_df=series_df,
         forecast_df=forecast_df,
         capacity_mbps=capacity_mbps,
-        title="24-Hour Forecast Curve with 95% Confidence Bounds",
+        title="24-Hour Forecast with Recent-Variation Band",
         height=400,
         dark_mode=dark_mode
     )
     st.plotly_chart(fig_fc, width="stretch")
+    st.caption("The shaded band reflects recent traffic variation; it is not a calibrated 95% confidence interval.")
 
     # Model Evaluation Comparison Table
     st.subheader("Model Evaluation on Test Holdout (7-Day Split)")
@@ -83,10 +107,12 @@ def main() -> None:
                 "Model Architecture": m_name,
                 "MAE (Mbps)": metrics["mae"],
                 "RMSE (Mbps)": metrics["rmse"],
-                "MAPE (%)": f"{metrics['mape']:.1f}%",
-                "Evaluation Mode": "Time-based Walk-Forward (Zero Leakage)"
+                "MAPE (%)": f"{metrics['mape']:.1f}%" if metrics["mape"] is not None else "N/A (actual is zero)",
+                "R²": metrics["r2"],
+                "Evaluation Mode": "Chronological 7-Day Holdout"
             })
         st.dataframe(pd.DataFrame(eval_rows), width="stretch", hide_index=True)
+        st.caption("R² is calculated on the held-out hours. It may be negative when predictions perform worse than the test-period mean.")
     else:
         st.info("Evaluation metrics unavailable for current dataset size.")
 
@@ -97,8 +123,8 @@ def main() -> None:
     ]].rename(columns={
         "target_ts": "Target Hour",
         "predicted_mbps": "Predicted Demand (Mbps)",
-        "lower_bound": "95% Lower (Mbps)",
-        "upper_bound": "95% Upper (Mbps)",
+        "lower_bound": "Variation Lower (Mbps)",
+        "upper_bound": "Variation Upper (Mbps)",
         "is_capacity_exceeded": "Capacity Warning"
     })
     st.dataframe(display_fc, width="stretch", hide_index=True)
