@@ -41,8 +41,20 @@ class BandwidthPredictor:
     def __init__(self, repo: DatabaseRepository) -> None:
         self.repo = repo
 
-    def prepare_series(self, start_ts: str, end_ts: str) -> pd.DataFrame:
-        """Fetch and format clean continuous hourly time-series."""
+    def prepare_series(
+        self,
+        start_ts: str,
+        end_ts: str,
+        *,
+        simulated: bool = False,
+    ) -> pd.DataFrame:
+        """Fetch hourly history, treating absent simulated intervals as zero traffic.
+
+        The simulator creates a network-metrics row for every hour, but omits
+        bandwidth rows when every simulated application is idle. In live mode,
+        missing bandwidth hours remain NaN because they mean the collector was
+        not running.
+        """
         sql = """
         SELECT 
             strftime('%Y-%m-%d %H:00:00', ts) AS hour_ts,
@@ -54,14 +66,31 @@ class BandwidthPredictor:
         ORDER BY hour_ts ASC;
         """
         df = self.repo.query_df(sql, {"start_ts": start_ts, "end_ts": end_ts})
-        if df.empty:
+        if df.empty and not simulated:
             return df
 
         df["dt"] = pd.to_datetime(df["hour_ts"])
-        df = df.set_index("dt").asfreq("h")
-        # A missing hour means the collector was not running. Preserve the gap
-        # instead of inventing interpolated traffic for charts and forecasts.
-        df["mbps"] = df["mbps"].where(df["sample_count"].fillna(0) > 0)
+        df = df.set_index("dt")
+        # Cover the selected, observed data window so quiet simulated hours
+        # before/after the first nonzero traffic hour are represented too.
+        data_start, data_end = self.repo.get_date_range()
+        if data_start and data_end:
+            range_start = max(pd.Timestamp(start_ts).floor("h"), pd.Timestamp(data_start).floor("h"))
+            range_end = min(pd.Timestamp(end_ts).floor("h"), pd.Timestamp(data_end).floor("h"))
+        elif df.empty:
+            return pd.DataFrame(columns=["hour_ts", "mbps"])
+        else:
+            range_start, range_end = df.index.min(), df.index.max()
+        if range_end < range_start:
+            return pd.DataFrame(columns=["hour_ts", "mbps"])
+        full_hours = pd.date_range(range_start, range_end, freq="h")
+        df = df.reindex(full_hours)
+        df["sample_count"] = df["sample_count"].fillna(0)
+        # In simulated mode an absent row inside the generated time window is
+        # a quiet hour. In live mode it remains a gap and is never synthesized.
+        df["mbps"] = df["mbps"].where(df["sample_count"] > 0)
+        if simulated:
+            df["mbps"] = df["mbps"].fillna(0.0)
         df["hour_ts"] = df.index.strftime("%Y-%m-%d %H:%M:%S")
         return df.drop(columns=["sample_count"]).reset_index(drop=True)
 

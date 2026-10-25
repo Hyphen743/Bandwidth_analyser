@@ -47,6 +47,14 @@ class SharedRankingStore:
             collector_token_hash TEXT UNIQUE,
             registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )""",
+        """CREATE TABLE IF NOT EXISTS ba_shared_collectors (
+            collector_id BIGSERIAL PRIMARY KEY,
+            friend_code TEXT NOT NULL REFERENCES ba_shared_accounts(friend_code) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            device_name TEXT NOT NULL DEFAULT '',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_seen TIMESTAMPTZ
+        )""",
         """CREATE TABLE IF NOT EXISTS ba_shared_friendships (
             owner_code TEXT NOT NULL REFERENCES ba_shared_accounts(friend_code) ON DELETE CASCADE,
             friend_code TEXT NOT NULL REFERENCES ba_shared_accounts(friend_code) ON DELETE CASCADE,
@@ -138,6 +146,39 @@ class SharedRankingStore:
             raise SharedRankingError("Could not load the friend list from the shared ranking database.") from exc
         return [{"friend_code": str(code), "username": str(name)} for code, name in rows]
 
+    def list_collectors(self, friend_code: str) -> list[dict[str, Any]]:
+        """List a user's registered computers without exposing collector secrets."""
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """SELECT collector_id, device_name, created_at, last_seen
+                       FROM ba_shared_collectors WHERE friend_code=%s
+                       ORDER BY created_at, collector_id""",
+                    (friend_code.strip().upper(),),
+                ).fetchall()
+        except Exception as exc:
+            raise SharedRankingError("Could not load registered computers from the shared ranking database.") from exc
+        return [
+            {
+                "collector_id": int(row[0]),
+                "device_name": str(row[1] or "Computer not yet seen"),
+                "created_at": row[2].isoformat() if row[2] else None,
+                "last_seen": row[3].isoformat() if row[3] else None,
+            }
+            for row in rows
+        ]
+
+    def revoke_collector(self, friend_code: str, collector_id: int) -> None:
+        """Revoke only the selected computer's collector token."""
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    "DELETE FROM ba_shared_collectors WHERE friend_code=%s AND collector_id=%s",
+                    (friend_code.strip().upper(), int(collector_id)),
+                )
+        except Exception as exc:
+            raise SharedRankingError("Could not revoke that computer's collector token.") from exc
+
     def rankings(self, owner_code: str, start_ts: str, end_ts: str, stale_after_seconds: int = 120) -> list[dict[str, Any]]:
         start = datetime.fromisoformat(start_ts).astimezone(timezone.utc)
         end = datetime.fromisoformat(end_ts).astimezone(timezone.utc)
@@ -147,20 +188,21 @@ class SharedRankingStore:
             UNION
             SELECT friend_code FROM ba_shared_friendships WHERE owner_code=%s
         ), period_usage AS (
-            SELECT friend_code, hostname, SUM(bytes_up) AS bytes_up, SUM(bytes_down) AS bytes_down,
-                   COUNT(*) AS sample_count
+            SELECT friend_code, SUM(bytes_up) AS bytes_up, SUM(bytes_down) AS bytes_down,
+                   COUNT(*) AS sample_count,
+                   COUNT(DISTINCT NULLIF(hostname, '')) AS device_count
             FROM ba_shared_usage WHERE ts >= %s AND ts <= %s
-            GROUP BY friend_code, hostname
+            GROUP BY friend_code
         ), latest AS (
-            SELECT friend_code, hostname, MAX(received_at) AS last_seen
-            FROM ba_shared_usage GROUP BY friend_code, hostname
+            SELECT friend_code, MAX(received_at) AS last_seen
+            FROM ba_shared_usage GROUP BY friend_code
         )
-        SELECT a.friend_code, a.username, COALESCE(p.hostname, 'No sample yet') AS hostname,
+        SELECT a.friend_code, a.username, COALESCE(p.device_count, 0) AS device_count,
                p.bytes_up, p.bytes_down, COALESCE(p.sample_count, 0) AS sample_count, l.last_seen
         FROM visible_accounts v
         JOIN ba_shared_accounts a ON a.friend_code=v.friend_code
         LEFT JOIN period_usage p ON p.friend_code=a.friend_code
-        LEFT JOIN latest l ON l.friend_code=a.friend_code AND l.hostname=p.hostname
+        LEFT JOIN latest l ON l.friend_code=a.friend_code
         """
         try:
             with self._connect() as conn:
@@ -169,7 +211,7 @@ class SharedRankingStore:
             raise SharedRankingError("Could not load metrics from the shared ranking database.") from exc
         now = datetime.now(timezone.utc)
         results = []
-        for code, username, hostname, up, down, count, last_seen in rows:
+        for code, username, device_count, up, down, count, last_seen in rows:
             unavailable = int(count or 0) == 0
             stale = last_seen is None or (now - last_seen).total_seconds() > stale_after_seconds
             up_bytes = int(up or 0) if not unavailable else None
@@ -177,7 +219,7 @@ class SharedRankingStore:
             results.append({
                 "friend_code": code,
                 "username": username,
-                "hostname": hostname,
+                "device_count": int(device_count or 0),
                 "download_bytes": down_bytes,
                 "upload_bytes": up_bytes,
                 "total_bytes": (up_bytes + down_bytes) if up_bytes is not None else None,
@@ -187,15 +229,26 @@ class SharedRankingStore:
         results.sort(key=lambda item: (item["total_bytes"] is None, -(item["total_bytes"] or 0), item["username"].casefold()))
         return results
 
-    def register_collector_token(self, friend_code: str, token: str) -> None:
+    def register_collector_token(self, friend_code: str, token: str, device_name: str = "") -> None:
         digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
-        with self._connect() as conn:
-            updated = conn.execute(
-                "UPDATE ba_shared_accounts SET collector_token_hash=%s WHERE friend_code=%s",
-                (digest, friend_code.strip().upper()),
-            ).rowcount
-        if not updated:
-            raise SharedRankingError("Your account is not registered in the shared ranking database.")
+        friend_code = friend_code.strip().upper()
+        try:
+            with self._connect() as conn:
+                inserted = conn.execute(
+                    """INSERT INTO ba_shared_collectors(friend_code, token_hash, device_name)
+                       VALUES (%s, %s, %s) ON CONFLICT(token_hash) DO NOTHING""",
+                    (friend_code, digest, device_name.strip()[:100]),
+                ).rowcount
+                existing = conn.execute(
+                    "SELECT friend_code FROM ba_shared_collectors WHERE token_hash=%s",
+                    (digest,),
+                ).fetchone()
+                if not existing or existing[0] != friend_code:
+                    raise SharedRankingError("Could not register a collector token for this account.")
+        except SharedRankingError:
+            raise
+        except Exception as exc:
+            raise SharedRankingError("Could not register this computer with the shared ranking database.") from exc
 
     def ingest_usage(self, token: str, payload: dict[str, Any]) -> bool:
         try:
@@ -214,10 +267,20 @@ class SharedRankingStore:
         try:
             with self._connect() as conn:
                 account = conn.execute(
-                    "SELECT friend_code FROM ba_shared_accounts WHERE collector_token_hash=%s", (token_hash,)
+                    """SELECT friend_code FROM ba_shared_collectors WHERE token_hash=%s
+                       UNION ALL
+                       SELECT friend_code FROM ba_shared_accounts WHERE collector_token_hash=%s
+                       LIMIT 1""",
+                    (token_hash, token_hash),
                 ).fetchone()
                 if not account:
                     raise PermissionError("Invalid collector token.")
+                conn.execute(
+                    """UPDATE ba_shared_collectors
+                       SET device_name=COALESCE(NULLIF(%s, ''), device_name), last_seen=NOW()
+                       WHERE token_hash=%s""",
+                    (hostname, token_hash),
+                )
                 cursor = conn.execute(
                     """INSERT INTO ba_shared_usage(friend_code, sample_id, ts, bytes_up, bytes_down, hostname)
                        VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (friend_code, sample_id) DO NOTHING""",

@@ -112,12 +112,18 @@ def _render_shared_account_friend_controls(
                     shared.remove_friend(friend_code, friend["friend_code"])
                     st.rerun()
 
-    st.markdown("**Connect this computer's local collector**")
-    st.caption("The separate collector samples this computer's default-route adapter. It must keep running to send current usage.")
-    if st.button("Create / rotate collector token", key="make_shared_collector_token"):
+    st.markdown("**Connect a computer's local collector**")
+    st.caption("Create one token per computer you want included. Creating another computer's token will not disable existing collectors.")
+    device_label = st.text_input(
+        "Computer label",
+        placeholder="e.g. Raman Desktop",
+        max_chars=100,
+        key="shared_collector_device_label",
+    )
+    if st.button("Create collector token for this computer", key="make_shared_collector_token"):
         token = create_collector_token(account_id, repo)
         try:
-            shared.register_collector_token(friend_code, token)
+            shared.register_collector_token(friend_code, token, device_label)
         except SharedRankingError as exc:
             st.error(f"Token could not be registered with the shared service: {exc}")
             st.session_state.pop("shared_collector_token", None)
@@ -126,7 +132,7 @@ def _render_shared_account_friend_controls(
     token = st.session_state.get("shared_collector_token")
     if token:
         st.code(token, language=None)
-        st.caption("This secret is shown only in this signed-in session. Rotating the token disables the previous token.")
+        st.caption("This secret is shown only in this signed-in session. Keep a separate token on each computer; revoke lost tokens below.")
         backend_url = st.text_input(
             "Public HTTPS ingestion URL",
             value=_deployment_setting("BANDWIDTH_API_URL"),
@@ -138,6 +144,17 @@ def _render_shared_account_friend_controls(
             st.caption("Run this command from a downloaded project folder on each computer you want ranked. Stop it with Ctrl+C.")
         else:
             st.info("Set BANDWIDTH_API_URL to your public HTTPS collector service URL before sharing this command.")
+
+    collectors = shared.list_collectors(friend_code)
+    if collectors:
+        st.markdown("**Registered computers**")
+        for collector in collectors:
+            left, right = st.columns([5, 1])
+            last_seen = collector["last_seen"] or "not connected yet"
+            left.caption(f"{collector['device_name']} · Last sample: {last_seen}")
+            if right.button("Revoke", key=f"revoke_shared_collector_{collector['collector_id']}"):
+                shared.revoke_collector(friend_code, collector["collector_id"])
+                st.rerun()
 
 
 @st.fragment(run_every=15)
@@ -160,7 +177,7 @@ def _render_shared_friend_ranking(
         display.append({
             "Rank": rank,
             "Username": item["username"],
-            "Device": item.get("hostname", "Unknown device"),
+            "Computers reporting": item.get("device_count", 0),
             "Download usage (GB)": round(item["download_bytes"] / (1024 ** 3), 4) if item["download_bytes"] is not None else "—",
             "Upload usage (GB)": round(item["upload_bytes"] / (1024 ** 3), 4) if item["upload_bytes"] is not None else "—",
             "Total usage (GB)": round(item["total_bytes"] / (1024 ** 3), 4) if item["total_bytes"] is not None else "—",
@@ -168,7 +185,7 @@ def _render_shared_friend_ranking(
         })
     frame = pd.DataFrame(display)
     st.dataframe(frame, width="stretch", hide_index=True)
-    st.caption("Auto-refreshes every 15 seconds. Each row is one device's actual default-adapter byte deltas. 'Stale' means no upload in 2 minutes; 'Unavailable' means no sample in the selected period.")
+    st.caption("Auto-refreshes every 15 seconds. Each row ranks one account; usage is summed across all of that friend's registered computers. 'Stale' means no upload in 2 minutes; 'Unavailable' means no sample in the selected period.")
     download_csv_button(frame, filename="friend_bandwidth_ranking.csv", label="Export Friend Ranking")
 
 

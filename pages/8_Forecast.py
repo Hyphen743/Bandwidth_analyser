@@ -14,13 +14,40 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd
+import numpy as np
 import streamlit as st
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
 
 from ml.predictor import BandwidthPredictor
 from ui.charts import build_forecast_chart
 from ui.common import download_csv_button, render_kpi, setup_page
 
 st.set_page_config(page_title="Demand Forecast", page_icon="📈", layout="wide")
+
+
+def _fit_linear_trend(series: pd.DataFrame) -> dict:
+    """Fit the coursework regression equation directly from the selected series."""
+    observed = series.loc[:, ["hour_ts", "mbps"]].dropna(subset=["mbps"])
+    if len(observed) < 2:
+        return {}
+
+    timestamps = pd.to_datetime(observed["hour_ts"])
+    x_hours = (timestamps - timestamps.iloc[0]).dt.total_seconds().to_numpy() / 3600.0
+    y_mbps = observed["mbps"].to_numpy(dtype=float)
+    if not np.isfinite(x_hours).all() or not np.isfinite(y_mbps).all():
+        return {}
+
+    model = LinearRegression().fit(x_hours.reshape(-1, 1), y_mbps)
+    fitted = model.predict(x_hours.reshape(-1, 1))
+    return {
+        "slope_mbps_per_hour": float(model.coef_[0]),
+        "intercept_mbps": float(model.intercept_),
+        "r2": float(r2_score(y_mbps, fitted)),
+        "samples": int(len(y_mbps)),
+        "start_ts": timestamps.iloc[0],
+        "end_ts": timestamps.iloc[-1],
+    }
 
 
 def main() -> None:
@@ -33,7 +60,11 @@ def main() -> None:
     end_ts = filters["end_ts"]
 
     predictor = BandwidthPredictor(repo)
-    series_df = predictor.prepare_series(start_ts, end_ts)
+    series_df = predictor.prepare_series(
+        start_ts,
+        end_ts,
+        simulated=filters["data_source"] == "simulated",
+    )
 
     if series_df.empty or len(series_df) < 49:
         st.warning("Insufficient historical data for forecasting. At least 49 hourly observations are needed; broaden your date range.")
@@ -57,8 +88,8 @@ def main() -> None:
     forecast_df = predictor.forecast_next_24h(series_df, model_type=selected_model)
     if forecast_df.empty:
         st.warning(
-            "Forecast unavailable: this view needs at least 49 consecutive observed hourly samples. "
-            "Unmonitored hours are left as gaps instead of being filled with invented traffic."
+            "Forecast unavailable: this view needs at least 49 consecutive hourly observations. "
+            "Simulated quiet hours count as zero traffic; gaps in live collection remain unfilled."
         )
         return
 
@@ -115,6 +146,30 @@ def main() -> None:
         st.caption("R² is calculated on the held-out hours. It may be negative when predictions perform worse than the test-period mean.")
     else:
         st.info("Evaluation metrics unavailable for current dataset size.")
+
+    # Simple regression-equation goodness of fit, kept distinct from the
+    # chronological forecast scores above.
+    trend_fit = _fit_linear_trend(series_df)
+    st.subheader("Linear Regression Equation (Selected History)")
+    if trend_fit:
+        slope = trend_fit["slope_mbps_per_hour"]
+        intercept = trend_fit["intercept_mbps"]
+        intercept_sign = "+" if intercept >= 0 else "−"
+        st.code(
+            f"Mbps = {slope:.6f} × elapsed_hours {intercept_sign} {abs(intercept):.4f}",
+            language="text",
+        )
+        fit_col, slope_col, sample_col = st.columns(3)
+        fit_col.metric("Regression Fit R²", f"{trend_fit['r2']:.4f}")
+        slope_col.metric("Slope", f"{slope:.6f} Mbps/hour")
+        sample_col.metric("Observed Samples", f"{trend_fit['samples']:,}")
+        st.caption(
+            f"In-sample linear fit from {trend_fit['start_ts']} through {trend_fit['end_ts']}. "
+            "Here x is elapsed hours from the first observed sample and y is measured throughput in Mbps. "
+            "This regression-equation R² is separate from the 7-day forecast holdout R² above."
+        )
+    else:
+        st.info("A linear regression fit needs at least two valid observed samples.")
 
     # Forecast Tabular Data
     st.subheader("Next 24 Hours Forecast Schedule")
