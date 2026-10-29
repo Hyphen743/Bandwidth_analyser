@@ -391,11 +391,7 @@ def build_congestion_chart(
     ))
 
     # Congestion points
-    # The page slider is a utilization threshold, so only utilization
-    # crossings should move these markers as the slider changes.
-    congested = metrics_df[
-        metrics_df["utilization_pct"] >= threshold_util
-    ]
+    congested = metrics_df[metrics_df["is_congested"] == 1]
     if not congested.empty:
         fig.add_trace(go.Scatter(
             x=congested["ts"],

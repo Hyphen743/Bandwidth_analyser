@@ -47,18 +47,13 @@ def main() -> None:
         st.warning("No network telemetry records available.")
         return
 
-    # This control is specifically a utilization cutoff. Keep its count and
-    # chart markers tied to the same predicate; latency/loss warnings are
-    # surfaced separately in their own telemetry KPIs.
-    metrics_df = metrics_df.copy()
-    metrics_df["is_utilization_congested"] = metrics_df["utilization_pct"] >= threshold_util
-    congested_count = int(metrics_df["is_utilization_congested"].sum())
+    congested_count = len(metrics_df[metrics_df["is_congested"] == 1])
     total_samples = len(metrics_df)
     cong_rate = (congested_count / total_samples * 100.0) if total_samples > 0 else 0.0
 
     # KPIs
     k1, k2, k3, k4 = st.columns(4)
-    render_kpi(k1, "Utilization-Congested Intervals", str(congested_count), delta=f"{cong_rate:.1f}% of timeline", delta_type="neg" if congested_count > 0 else "pos")
+    render_kpi(k1, "Congested Intervals", str(congested_count), delta=f"{cong_rate:.1f}% of timeline", delta_type="neg" if congested_count > 0 else "pos")
     render_kpi(k2, "Peak Utilization", f"{metrics_df['utilization_pct'].max():.1f}%", delta="Maximum load observed")
     render_kpi(k3, "Mean Bufferbloat Latency", f"{metrics_df['latency_ms'].mean():.1f} ms", delta=f"Jitter {metrics_df['jitter_ms'].mean():.1f} ms")
     render_kpi(k4, "Packet Drop Events", f"{len(metrics_df[metrics_df['packet_loss_pct'] > 0])}", delta="Loss > 0%")
@@ -75,10 +70,6 @@ def main() -> None:
         dark_mode=dark_mode
     )
     st.plotly_chart(cong_fig, width="stretch")
-    st.caption(
-        "The interval count and red timeline markers use the utilization threshold above. "
-        "Latency and packet-loss readings remain available in their separate KPIs."
-    )
 
     # Correlation Matrix & Offender Attribution Row
     c_corr, c_offend = st.columns([1.1, 1.3])
@@ -96,18 +87,7 @@ def main() -> None:
         st.subheader("Top Traffic During Congestion")
         if filters["data_source"] == "live":
             st.caption("Live interface totals are unattributed; these records cannot identify an offending application.")
-        selected_congested_ts = metrics_df.loc[
-            metrics_df["is_utilization_congested"], "ts"
-        ]
-        offenders_df = (
-            repo.get_congested_interval_offenders(
-                str(selected_congested_ts.min()),
-                str(selected_congested_ts.max()),
-                limit=5,
-            )
-            if not selected_congested_ts.empty
-            else pd.DataFrame()
-        )
+        offenders_df = analyzer.attribute_congestion_offenders(start_ts, end_ts, limit=5)
         if not offenders_df.empty:
             st.dataframe(
                 offenders_df.rename(columns={
